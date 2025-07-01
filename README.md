@@ -10,4 +10,4 @@
 - 4、确定策略或者ETF网格是否可以买入
 - 5、回测确定目标代码、策略以及收益率
 
-## dependency
+## dependency# fintech
