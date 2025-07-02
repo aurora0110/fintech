@@ -5,7 +5,7 @@ import os
 import config
 from datetime import datetime
 
-def download_stock_data(symbol, type, start_date, end_date, adjust):
+def download_stock_data(symbol, type, start_date, end_date):
     """
     获取市场某只股票数据
     :param symbol: 股票代码
@@ -17,7 +17,7 @@ def download_stock_data(symbol, type, start_date, end_date, adjust):
     """
     try:
         if type == "stock":
-            stock_data = ak.stock_zh_a_hist("000001", "daily", start_date, end_date, "qfq") # symbol=symbol, period="daily", start_date=start_date, end_date=end_date, adjust="qfq"
+            stock_data = ak.stock_zh_a_hist(symbol, "daily", start_date, end_date, "qfq") # symbol=symbol, period="daily", start_date=start_date, end_date=end_date, adjust="qfq"
             # stock_data = ak.stock_zh_a_hist_tx(symbol = "sz000001", start_date = "19980101", end_date = "20500101", adjust = "",timeout = None)
             #stock_data = ak.stock_zh_a_hist(symbol= "000001",period= "daily",start_date= "19980101",end_date= "20500101",adjust= "",timeout = None)
             print('stock_data:', stock_data)
@@ -27,6 +27,11 @@ def download_stock_data(symbol, type, start_date, end_date, adjust):
     except Exception as e:
         print(f"获取数据失败: {str(e)}")
         return None
+
+def download_stock_category():
+    df_a = ak.stock_info_a_code_name().assign(market="A股")
+    print(df_a)
+    return df_a
 
 def download_etf_data(symbol):
     """
@@ -89,6 +94,45 @@ def download_etfHistory_data(type, symbol, start_date, end_date):
         print(f"获取{type} {symbol}历史数据失败: {str(e)}")
         return None
     
+def batch_download_stock_data(symbol_list, days, year_interval=5):
+    """
+    批量获取股票最近N天的数据
+    :param symbol_list: 股票代码列表，不带市场前缀，如['000001', '000002']
+    :param days: 天数
+    :param year_interval: 时间间隔，默认5年
+    :return: 股票实时数据
+    """
+    # 获取当前时间
+    now = datetime.now()
+    start_date = now.strftime("%Y%m%d")
+    start_date = datetime.strptime(start_date, "%y%m%d")
+    end_date = start_date.replace(year=start_date.year - year_interval)
+    
+    all_data = {}
+
+    for symbol in symbol_list:
+        history_stock_data = download_stock_data(symbol=symbol, type="stock", start_date=start_date, end_date=end_date)
+
+        if history_stock_data is not None or history_stock_data is not None: 
+            if days == "all": 
+                if history_stock_data is not None:
+                    # 获取所有时间段etf数据
+                    all_data[symbol] = history_stock_data
+                else:
+                    # 获取所有时间段lof数据
+                    all_data[symbol] = history_stock_data
+            else:
+                if history_stock_data is not None:
+                    # 获取最近N天数据
+                    history_data = history_data.tail(days)
+                    all_data[symbol] = history_data
+                else:
+                    history_data = history_data.tail(days)
+                    all_data[symbol] = history_data
+        else:
+            print(f"批量获取stock：{symbol}历史数据失败")
+    return all_data
+    
 def batch_download_etf_data(symbol_list, days, year_interval=5):
     """
     批量获取基金最近N天的数据
@@ -126,7 +170,7 @@ def batch_download_etf_data(symbol_list, days, year_interval=5):
                     history_data = history_data.tail(days)
                     all_data[symbol] = history_data
         else:
-            print(f"批量获取{symbol}历史数据失败")
+            print(f"批量获取fund：{symbol}历史数据失败")
     return all_data
 
 def save_2_csv(data, symbol):
@@ -165,5 +209,11 @@ if __name__ == '__main__':
     #istory_etf_data = batch_download_etf_data(symbol_list,days="all")
     #for key, value in history_etf_data.items():
      #   save_2_csv(value, key)
+
+    # 获取A股全部股票目录
+    #df = download_stock_category()
+
+    # 获取某只股票的历史记录
+    stock_data = download_stock_data("000001", "stock", "20240630", "20250730")
 
 
