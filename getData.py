@@ -133,20 +133,14 @@ def batch_download_stock_data(symbol_list, days, year_interval=5):
             print(f"批量获取stock：{symbol}历史数据失败")
     return all_data
     
-def batch_download_etf_data(symbol_list, days, year_interval=5):
+def batch_download_etf_data(symbol_list, days, start_date, end_date, year_interval=5):
     """
     批量获取基金最近N天的数据
     :param symbol_list: 基金代码列表，带市场前缀，如['sh000001', 'sh000002']
-    :param days: 天数
+    :param days: 类型
     :param year_interval: 时间间隔，默认5年
     :return: 基金实时数据
     """
-    # 获取当前时间
-    now = datetime.now()
-    start_date = now.strftime("%Y%m%d")
-    start_date = datetime.strptime(start_date, "%y%m%d")
-    end_date = start_date.replace(year=start_date.year - year_interval)
-    
     all_data = {}
 
     for symbol in symbol_list:

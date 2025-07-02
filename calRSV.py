@@ -13,7 +13,6 @@ def calrsv(
     low_n = df["最低"].rolling(window=n, min_periods=1).min()
     high_close_n = df["收盘"].rolling(window=n, min_periods=1).max()
     rsv = (df["收盘"] - low_n) / (high_close_n - low_n + 1e-9) * 100.0
-    print(f'今日：{df["日期"].tolist()[-1]}，RSV：{rsv.tolist()[-1]}')
 
     return rsv
 

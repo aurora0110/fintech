@@ -1,3 +1,6 @@
+from datetime import datetime
+from dateutil.relativedelta import relativedelta
+
 """
 入参
 """
@@ -15,6 +18,17 @@ windows=[20, 30, 60, 120]
 # 绘制各条均线颜色
 colors = ['orange', 'green', 'red', 'blue']
 
-# 开始分析的日期，终止分析的日期
-start_date = '2020-06-27'
-end_date = '2025-06-27'
+# 获取当前时间
+now = datetime.now()
+end_date = now.strftime("%Y%m%d")
+
+years_ago =  now - relativedelta(years=5) # 获取5年前的日期
+start_date = years_ago.strftime("%Y%m%d")
+
+# 回测参数，amount--投入总金额，ineterval_days--最小操作时间，shares--目标手数，each_buy_shares--每次购买份数
+amount = 20000
+ineterval_days = 1
+total_shares = 10
+each_buy_shares = 1000
+
+print(f"起始日期：{start_date}, 结束日期：{end_date}")
