@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 # @params: data pd.DataFrame
 # @params: days int
 # @params: price_type str
-# @return: data pd.DataFrame
+# @return: result dict
 def cal_macd(data, start_date, end_date, days_short=12, days_long=26, price_type='收盘'):
     data = data[(data['日期'] >= start_date) & (data['日期'] <= end_date)]
 

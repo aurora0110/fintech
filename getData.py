@@ -94,7 +94,7 @@ def download_etfHistory_data(type, symbol, start_date, end_date):
         print(f"获取{type} {symbol}历史数据失败: {str(e)}")
         return None
     
-def batch_download_stock_data(symbol_list, days, year_interval=5):
+def batch_download_stock_data(symbol_list, days, start_date, end_date, year_interval=5):
     """
     批量获取股票最近N天的数据
     :param symbol_list: 股票代码列表，不带市场前缀，如['000001', '000002']
@@ -102,11 +102,6 @@ def batch_download_stock_data(symbol_list, days, year_interval=5):
     :param year_interval: 时间间隔，默认5年
     :return: 股票实时数据
     """
-    # 获取当前时间
-    now = datetime.now()
-    start_date = now.strftime("%Y%m%d")
-    start_date = datetime.strptime(start_date, "%y%m%d")
-    end_date = start_date.replace(year=start_date.year - year_interval)
     
     all_data = {}
 
@@ -174,7 +169,6 @@ def save_2_csv(data, symbol):
     :param symbol: 文件名
     :return: None
     """
-    timestamp = datetime.now().strftime("%Y%m%d")
     print(f"正在保存{symbol}数据到csv文件...")
     data.to_csv(f"{symbol}.csv")
 
@@ -199,7 +193,9 @@ if __name__ == '__main__':
     # 获取etf历史数据使用实例
     category_name = "全市场etf目录0612"
     symbol = config.symbol # symbol 调用em东方财富接口不用加前缀，调用sina新浪接口要加上市场前缀 sh sz
-    symbol_list = config.symbol_list
+    symbol_list = config.stock_symbol_list
+    stock_start_date = config.stock_start_date
+    end_date = config.end_date
     #istory_etf_data = batch_download_etf_data(symbol_list,days="all")
     #for key, value in history_etf_data.items():
      #   save_2_csv(value, key)
@@ -208,6 +204,8 @@ if __name__ == '__main__':
     #df = download_stock_category()
 
     # 获取某只股票的历史记录
-    stock_data = download_stock_data("000001", "stock", "20240630", "20250730")
+    stock_data = batch_download_stock_data(symbol_list, days="all", start_date=stock_start_date, end_date=end_date, year_interval=1)
+    for key, value in stock_data.items():
+        save_2_csv(value, key)
 
 

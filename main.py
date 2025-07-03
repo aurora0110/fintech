@@ -19,8 +19,9 @@ if __name__ == '__main__':
     file_path = config.file_path 
     windows = config.windows
     colors = config.colors
-    symbol_list = config.symbol_list
-    start_date = config.start_date
+    etf_symbol_list = config.etf_symbol_list
+    etf_start_date = config.etf_start_date
+    stock_start_date = config.stock_start_date
     end_date = config.end_date
     amount = config.amount
     ineterval_days = config.ineterval_days
@@ -55,7 +56,7 @@ if __name__ == '__main__':
     select_list_JS = []
     select_list_JSBBI = []
 
-    for symbol in symbol_list:
+    for symbol in etf_symbol_list:
         J_boolean = False
         SHAKEOUT_boolean = False
         BBI_boolean = False
@@ -81,24 +82,24 @@ if __name__ == '__main__':
         atr = ctr.cal_ATR(data, day_window)
 
         # 计算MA bbi均线并画图
-        data_ma = cm.calculate_moving_averages(data, start_date, end_date, windows)
+        data_ma = cm.calculate_moving_averages(data, etf_start_date, end_date, windows)
         # cm.plot_moving_averages(data_ma, symbol, colors, 'MA')
-        data_bbi = cm.calculate_bbi(data, start_date, end_date)
+        data_bbi = cm.calculate_bbi(data, etf_start_date, end_date)
         # cm.plot_moving_averages(data_bbi, symbol, [colors[0]], 'BBI')
-        data_price = cm.calculate_price(data, start_date, end_date)
+        data_price = cm.calculate_price(data, etf_start_date, end_date)
         # 计算MACD
-        data_macd = calMACD.cal_macd(data, start_date, end_date, 12, 26, '收盘')
+        data_macd = calMACD.cal_macd(data, etf_start_date, end_date, 12, 26, '收盘')
         # 计算kdj
-        data_kdj = calKDJ.cal_KDJ(data, 9, 3, 3, start_date, end_date)
+        data_kdj = calKDJ.cal_KDJ(data, 9, 3, 3, etf_start_date, end_date)
         # 监控洗盘
-        data_shakeout= som.monitor(data, start_date, end_date)
+        data_shakeout= som.monitor(data, etf_start_date, end_date)
         cm.plot_all(data_ma, data_bbi, data_price, data_macd, data_kdj, data_shakeout, symbol, windows)
 
         # 计算回测收益，策略：每到j值满足条件就买入或者卖出
         data_input = []
         data_input.extend(data_kdj.get('ret_kdj')[1])
         data_input.extend(data_kdj.get('ret_kdj')[-5])
-        data_back = bt.backTest(data_input, amount, ineterval_days, total_shares, each_buy_shares, start_date, end_date)
+        data_back = bt.backTest(data_input, amount, ineterval_days, total_shares, each_buy_shares, etf_start_date, end_date)
         if data_back['avg_profit'] > 0.05:
             well_list.append([symbol, f"{round(data_back['avg_profit'] * 100, 3)}%"])
         else:
@@ -128,7 +129,7 @@ if __name__ == '__main__':
         print(f"满足条件：J值小于-5：{J_boolean}，单针下20短期指标小于20且单针下20长期指标大于60：{SHAKEOUT_boolean}，最近连续10天的收盘价格大于bbi：{BBI_boolean}")
         print("***********" * 10)
 
-    print(f"当前回测策略为：可投入金额为{amount}元，最小操作间隔为{ineterval_days}天，计划操作份额为{shares}元")
+    print(f"当前回测策略为：可投入金额为{amount}元，最小操作间隔为{ineterval_days}天，计划操作手数为{total_shares}手")
     print(f"回测策略年化收益大于5%有{len(well_list)}个：{well_list}")
     print(f"回测策略年化收益小于5%有{len(ordinary_list)}个：{ordinary_list}")
     print(f"当日满足J值小于-5，单针下20短期指标小于20且单针下20长期指标大于60的ETF有{len(select_list_JS)}个：{select_list_JS}")
