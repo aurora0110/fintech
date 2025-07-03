@@ -3,7 +3,7 @@ import pandas as pd
 import calKDJ as kdj
 from datetime import datetime
 
-def backTest(file, amount, windows, total_shares, each_buy_shares, start_date, end_date):
+def backTest(file, amount, windows, total_shares, each_buy_shares, start_date, end_date, backtest_log_path):
     '''
     回测
     :param file: 数据文件路径
@@ -11,10 +11,13 @@ def backTest(file, amount, windows, total_shares, each_buy_shares, start_date, e
     :param windows: 窗口大小，多长时间操作一次
     :param total_shares: 投入总手数
     :param each_buy_shares: 每次买入份数
+    :param backtest_log_path: 回测日志路径
     :return:回测结果
     '''
     #data = pd.read_csv(file_path)
     #data_list = kdj.cal_KDJ(data, 9, 3, 3)
+    # 时间戳
+    log_content = f"[{datetime.now()}] 开始回测\n"
 
     df = pd.DataFrame(file, columns=['date', 'j_value', 'price', 'high_price', 'low_price']) # 以收盘价用作后续价格
     df = df[(df['date'] >= str(start_date)) & (df['date'] <= str(end_date))]
@@ -76,7 +79,9 @@ def backTest(file, amount, windows, total_shares, each_buy_shares, start_date, e
                 shares_held += buy_shares
                 buy_prices.append(price) # 每次满足条件的买入都放到list里
                 trade_history.append({'date': current_date, 'type': 'buy', 'shares': buy_shares, 'price': price}) # 'cost':cost
-                print(f"进行一次买入操作，当前持有份额为：{shares_held}，还可操作份额为：{total_shares - shares_held}，当前价格为：{price}，当前现金为：{cash}")
+                #print(f"进行一次买入操作，当前持有份额为：{shares_held}，还可操作份额为：{total_shares - shares_held}，当前价格为：{price}，当前现金为：{cash}")
+                with open(backtest_log_path, 'a') as f:
+                    f.write(f"进行一次买入操作，当前持有份额为：{shares_held}，还可操作份额为：{total_shares - shares_held}，当前价格为：{price}，当前现金为：{cash}\n")
 
         # 卖出逻辑 ---------------------------------》这里可以添加上其他的策略作为限制条件，看回测效果如何？比如20250702是否加一个当盈利率达到一定的标准再卖出？
         if not recent_sell and shares_held >= 0 and len(buy_prices) > 0:
@@ -87,11 +92,11 @@ def backTest(file, amount, windows, total_shares, each_buy_shares, start_date, e
             elif j_value >= 100:
                 sell_shares = 1
 
-            elif j_value >= 90:
-                sell_shares = 1
+            #elif j_value >= 90:
+                #sell_shares = 1
 
-            elif j_value >= 80:
-                sell_shares = 1
+            #elif j_value >= 80:
+                #sell_shares = 1
             
             # 检查当前价格是否大于 最近买入价格？未卖出价格？ price > buy_prices.max() price > buy_prices.min() price > buy_prices[-1]?
             if sell_shares > 0 and shares_held >= sell_shares and price > min(buy_prices):
@@ -102,8 +107,9 @@ def backTest(file, amount, windows, total_shares, each_buy_shares, start_date, e
                 # 移除已买入的价格中最小的买入价格记录
                 buy_prices.remove(min_price) if len(buy_prices) > 0 else None
                 trade_history.append({'date': current_date, 'type': 'sell', 'shares': sell_shares, 'price': price, 'buy_prices':buy_prices}) # , 'revenue':revenue     
-                print(f"进行一次卖出操作，当前持有份额为：{shares_held}，还可操作份额为：{total_shares - shares_held}，当前价格为：{price}，当前现金为：{cash}")
-           
+                #print(f"进行一次卖出操作，当前持有份额为：{shares_held}，还可操作份额为：{total_shares - shares_held}，当前价格为：{price}，当前现金为：{cash}")
+                with open(backtest_log_path, 'a') as f:
+                    f.write(f"进行一次卖出操作，当前持有份额为：{shares_held}，还可操作份额为：{total_shares - shares_held}，当前价格为：{price}，当前现金为：{cash}\n")
 
         # 更新投资组合价值
         portfolio_value = cash + shares_held * price
@@ -160,7 +166,10 @@ def backTest(file, amount, windows, total_shares, each_buy_shares, start_date, e
             if sell_price > buy_price:
                 profit = (sell_price - buy_price) / buy_price
                 earning_results.append(profit)
-                print(f'sell_price:{sell_price}, sell_date:{sell_date}, buy_price:{buy_price}, buy_date:{buy_date}, profit:{round(profit * 100, 3)}%, holddays:{(sell_date - buy_date).days}')
+                #print(f'sell_price:{sell_price}, sell_date:{sell_date}, buy_price:{buy_price}, buy_date:{buy_date}, profit:{round(profit * 100, 3)}%, holddays:{(sell_date - buy_date).days}')
+                with open(backtest_log_path, 'a') as f:
+                    f.write(f'sell_price:{sell_price}, sell_date:{sell_date}, buy_price:{buy_price}, buy_date:{buy_date}, profit:{round(profit * 100, 3)}%, holddays:{(sell_date - buy_date).days}\n')
+
                 holddays_list.append(int((sell_date - buy_date).days))
                 buy_list.pop(j)
                 sell_list.pop(i)
@@ -182,7 +191,9 @@ def backTest(file, amount, windows, total_shares, each_buy_shares, start_date, e
             j = 0
     avg_profit = sum(earning_results) / int(end_year - start_year) if earning_results else 0
     result['avg_profit'] = avg_profit
-    print(f'{start_date}到{end_date}平均年化收益: {round(avg_profit * 100, 3)}%，平均持有时长为：{round(sum(holddays_list) / len(holddays_list),1)}天')
+    #print(f'{start_date}到{end_date}平均年化收益: {round(avg_profit * 100, 3)}%，平均持有时长为：{round(sum(holddays_list) / len(holddays_list),1)}天')
+    with open(backtest_log_path, 'a') as f:
+        f.write(f'{start_date}到{end_date}平均年化收益: {round(avg_profit * 100, 3)}%，平均持有时长为：{round(sum(holddays_list) / len(holddays_list),1)}天\n\n\n')
     return result
 
 sample_data = [

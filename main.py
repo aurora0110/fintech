@@ -13,6 +13,7 @@ import pandas as pd
 import sys
 import backTest as bt
 import shakeoutMonitoring as som
+import os
 
 if __name__ == '__main__':
     # 读取参数
@@ -27,6 +28,9 @@ if __name__ == '__main__':
     ineterval_days = config.ineterval_days
     total_shares = config.total_shares
     each_buy_shares = config.each_buy_shares
+    backtest_log_path = config.backtest_log_path
+    if not os.path.exists(backtest_log_path):
+        os.makedirs(backtest_log_path)
 
     logging.basicConfig(
     level=logging.INFO,
@@ -38,6 +42,7 @@ if __name__ == '__main__':
     ],
 )
     logger = logging.getLogger("myLogger")
+
     # 关闭特定的警告
     pd.options.mode.chained_assignment = None  # 默认='warn'
     # 获取当前时间
@@ -62,7 +67,9 @@ if __name__ == '__main__':
         BBI_boolean = False
         file_path = config.file_path 
         file_path = file_path + symbol + ".csv"
-        print(f"读取文件：{file_path}")
+        backtest_log_path_new = backtest_log_path + symbol + ".txt"
+        # 读取数据
+        print(f"读取文件：{file_path}，回测结果保存路径：{backtest_log_path_new}")
 
         # 读取数据
         data = getData.read_from_csv(file_path)
@@ -99,8 +106,8 @@ if __name__ == '__main__':
         data_input = []
         data_input.extend(data_kdj.get('ret_kdj')[1])
         data_input.extend(data_kdj.get('ret_kdj')[-5])
-        data_back = bt.backTest(data_input, amount, ineterval_days, total_shares, each_buy_shares, etf_start_date, end_date)
-        if data_back['avg_profit'] > 0.05:
+        data_back = bt.backTest(data_input, amount, ineterval_days, total_shares, each_buy_shares, etf_start_date, end_date, backtest_log_path_new)
+        if data_back['avg_profit'] > 0.1:
             well_list.append([symbol, f"{round(data_back['avg_profit'] * 100, 3)}%"])
         else:
             ordinary_list.append([symbol, f"{round(data_back['avg_profit'] * 100, 3)}%"])
@@ -124,16 +131,27 @@ if __name__ == '__main__':
     
         if J_boolean and SHAKEOUT_boolean:
             select_list_JS.append(symbol)
-            
+        
+        with open(backtest_log_path_new, 'a') as f:
+            f.write(f'当前回测策略为：可投入金额为{amount}元，最小操作间隔为{ineterval_days}天，计划操作手数为{total_shares}手')    
         print(f"今日：{data.iloc[-1]['日期']}，{symbol}，收盘价为：{data.iloc[-1]['收盘']}，最高价为：{data.iloc[-1]['最高']}，最低价为：{data.iloc[-1]['最低']}，J值为：{round(data_kdj['J'].iloc[-1],3)}，单针下20短期指标为：{round(data_shakeout['短期'].iloc[-1],3)}，单针下20长期指标为：{round(data_shakeout['长期'].iloc[-1],3)}")
         print(f"满足条件：J值小于-5：{J_boolean}，单针下20短期指标小于20且单针下20长期指标大于60：{SHAKEOUT_boolean}，最近连续10天的收盘价格大于bbi：{BBI_boolean}")
         print("***********" * 10)
 
+    
     print(f"当前回测策略为：可投入金额为{amount}元，最小操作间隔为{ineterval_days}天，计划操作手数为{total_shares}手")
-    print(f"回测策略年化收益大于5%有{len(well_list)}个：{well_list}")
-    print(f"回测策略年化收益小于5%有{len(ordinary_list)}个：{ordinary_list}")
+    print(f"回测策略年化收益大于10%有{len(well_list)}个：{well_list}")
+    print(f"回测策略年化收益小于10%有{len(ordinary_list)}个：{ordinary_list}")
     print(f"当日满足J值小于-5，单针下20短期指标小于20且单针下20长期指标大于60的ETF有{len(select_list_JS)}个：{select_list_JS}")
     print(f"当日满足J值小于-5，单针下20短期指标小于20且单针下20长期指标大于60，最近连续10天的收盘价格大于bbi的ETF有{len(select_list_JSBBI)}个：{select_list_JSBBI}")
+
+    '''
+
+    j <-5 买，j >= 100卖：回测策略年化收益大于5%有18个：[['sh515450', '33.15%'], ['sh563300', '8.727%'], ['sh512580', '11.72%'], ['sh588000', '43.853%'], ['sz159985', '34.575%'], ['sh520990', '22.023%'], ['sh510300', '8.248%'], ['sh510050', '5.664%'], ['sh518880', '15.299%'], ['sh512660', '54.898%'], ['sh512100', '31.273%'], ['sh512170', '6.721%'], ['sh513180', '29.988%'], ['sz159920', '19.895%'], ['sh512980', '58.359%'], ['sh515180', '23.133%'], ['sh512880', '21.619%'], ['sh512070', '43.714%']]
+    j <-5 买，j >= 90卖：回测策略年化收益大于5%有19个：[['sh515450', '23.494%'], ['sh563300', '8.368%'], ['sh512580', '21.007%'], ['sh588000', '46.655%'], ['sz159985', '24.288%'], ['sh520990', '18.806%'], ['sh510300', '10.157%'], ['sh510050', '10.294%'], ['sh518880', '12.595%'], ['sh512660', '52.128%'], ['sh512100', '17.886%'], ['sh512170', '27.299%'], ['sh513180', '36.293%'], ['sz159920', '28.681%'], ['sh512980', '33.322%'], ['sh515180', '19.142%'], ['sz159938', '16.125%'], ['sh512880', '33.652%'], ['sh512070', '33.672%']]
+    j <-5 买，j >= 80卖：回测策略年化收益大于5%有19个：[['sh515450', '20.666%'], ['sh563300', '8.368%'], ['sh512580', '23.326%'], ['sh588000', '44.329%'], ['sz159985', '19.201%'], ['sh520990', '18.573%'], ['sh510300', '10.578%'], ['sh510050', '8.167%'], ['sh518880', '10.802%'], ['sh512660', '42.412%'], ['sh512100', '16.21%'], ['sh512170', '35.676%'], ['sh513180', '31.666%'], ['sz159920', '23.266%'], ['sh512980', '33.456%'], ['sh515180', '15.083%'], ['sz159938', '20.701%'], ['sh512880', '28.0%'], ['sh512070', '19.654%']]
+
+    '''
 
 
 

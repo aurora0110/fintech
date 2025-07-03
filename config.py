@@ -14,6 +14,9 @@ stock_symbol_list = ["000001"]
 # 存量数据路径和计算年份
 file_path = '/Users/lidongyang/Desktop/MYINVESTSTRATEGY/'
 
+# 回测日志写入路径
+backtest_log_path = "/Users/lidongyang/Desktop/MYINVESTSTRATEGY/GridStrategy/logs/backTest/"
+
 # 均线窗口
 windows=[20, 30, 60, 120]
 
