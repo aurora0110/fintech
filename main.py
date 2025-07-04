@@ -100,6 +100,7 @@ if __name__ == '__main__':
         data_kdj = calKDJ.cal_KDJ(data, 9, 3, 3, etf_start_date, end_date)
         # 监控洗盘
         data_shakeout= som.monitor(data, etf_start_date, end_date)
+        # 画图
         cm.plot_all(data_ma, data_bbi, data_price, data_macd, data_kdj, data_shakeout, symbol, windows)
 
         # 计算回测收益，策略：每到j值满足条件就买入或者卖出
@@ -131,17 +132,18 @@ if __name__ == '__main__':
     
         if J_boolean and SHAKEOUT_boolean:
             select_list_JS.append(symbol)
-        
+
         with open(backtest_log_path_new, 'a') as f:
-            f.write(f'当前回测策略为：可投入金额为{amount}元，最小操作间隔为{ineterval_days}天，计划操作手数为{total_shares}手')    
+            f.write(f'*************当前回测策略为：可投入金额为{amount}元，最小操作间隔为{ineterval_days}天，计划操作手数为{total_shares}手*************')    
         print(f"今日：{data.iloc[-1]['日期']}，{symbol}，收盘价为：{data.iloc[-1]['收盘']}，最高价为：{data.iloc[-1]['最高']}，最低价为：{data.iloc[-1]['最低']}，J值为：{round(data_kdj['J'].iloc[-1],3)}，单针下20短期指标为：{round(data_shakeout['短期'].iloc[-1],3)}，单针下20长期指标为：{round(data_shakeout['长期'].iloc[-1],3)}")
         print(f"满足条件：J值小于-5：{J_boolean}，单针下20短期指标小于20且单针下20长期指标大于60：{SHAKEOUT_boolean}，最近连续10天的收盘价格大于bbi：{BBI_boolean}")
         print("***********" * 10)
 
+    # 画scatter图，把所有symbol的买卖操作都放在一张图上，反映操作密度
     
     print(f"当前回测策略为：可投入金额为{amount}元，最小操作间隔为{ineterval_days}天，计划操作手数为{total_shares}手")
-    print(f"回测策略年化收益大于10%有{len(well_list)}个：{well_list}")
-    print(f"回测策略年化收益小于10%有{len(ordinary_list)}个：{ordinary_list}")
+    print(f"回测策略年化收益大于10%有{len(well_list)}个：{well_list}，分别为：{well_list}")
+    print(f"回测策略年化收益小于10%有{len(ordinary_list)}个：{ordinary_list}，分别为：{ordinary_list}")
     print(f"当日满足J值小于-5，单针下20短期指标小于20且单针下20长期指标大于60的ETF有{len(select_list_JS)}个：{select_list_JS}")
     print(f"当日满足J值小于-5，单针下20短期指标小于20且单针下20长期指标大于60，最近连续10天的收盘价格大于bbi的ETF有{len(select_list_JSBBI)}个：{select_list_JSBBI}")
 

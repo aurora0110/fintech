@@ -34,7 +34,8 @@ stock_years_ago =  now - relativedelta(years=1) # 获取1年前的日期
 stock_start_date = stock_years_ago.strftime("%Y%m%d")
 
 # 回测参数，amount--投入总金额，ineterval_days--最小操作时间，shares--目标手数，each_buy_shares--每次购买份数
-amount = 20000
+amount = 200000
 ineterval_days = 1
 total_shares = 10
-each_buy_shares = 1000
+
+each_buy_shares = 10000 # 每次购买金额

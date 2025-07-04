@@ -38,6 +38,7 @@ def backTest(file, amount, windows, total_shares, each_buy_shares, start_date, e
 
     trade_history = [] # 记录交易历史
     buy_prices = [] # 记录买入价格
+    operate_counts = 0
 
     # 创建时间间隔，记录买入/卖出窗口
     buy_window = pd.Timedelta(days=windows)
@@ -76,6 +77,7 @@ def backTest(file, amount, windows, total_shares, each_buy_shares, start_date, e
             if buy_shares > 0 and cash >= price * buy_shares:
                 cost = price * buy_shares * each_buy_shares # buy_shares--当前买入手数，each_buy_shares--每次买入份数
                 cash -= cost
+                operate_counts += 1
                 shares_held += buy_shares
                 buy_prices.append(price) # 每次满足条件的买入都放到list里
                 trade_history.append({'date': current_date, 'type': 'buy', 'shares': buy_shares, 'price': price}) # 'cost':cost
@@ -102,6 +104,7 @@ def backTest(file, amount, windows, total_shares, each_buy_shares, start_date, e
             if sell_shares > 0 and shares_held >= sell_shares and price > min(buy_prices):
                 revenue = price * sell_shares * each_buy_shares
                 cash += revenue
+                operate_counts += 1
                 shares_held -= sell_shares
                 min_price = min(buy_prices)
                 # 移除已买入的价格中最小的买入价格记录
@@ -193,7 +196,7 @@ def backTest(file, amount, windows, total_shares, each_buy_shares, start_date, e
     result['avg_profit'] = avg_profit
     #print(f'{start_date}到{end_date}平均年化收益: {round(avg_profit * 100, 3)}%，平均持有时长为：{round(sum(holddays_list) / len(holddays_list),1)}天')
     with open(backtest_log_path, 'a') as f:
-        f.write(f'{start_date}到{end_date}平均年化收益: {round(avg_profit * 100, 3)}%，平均持有时长为：{round(sum(holddays_list) / len(holddays_list),1)}天\n\n\n')
+        f.write(f'{start_date}到{end_date}平均年化收益: {round(avg_profit * 100, 3)}%，平均持有时长为：{round(sum(holddays_list) / len(holddays_list),1)}天，年平均买卖操作次数为：{operate_counts / int(end_year - start_year)}次\n\n')
     return result
 
 sample_data = [
