@@ -9,8 +9,17 @@ def cal_KDJ(data, days, m1, m2, start_date, end_date):
     :param m2: D值的平滑周期（默认3）
     :return: 原始DataFrame添加 'K', 'D', 'J' 列
     """
-    data = data[(data['日期'] >= str(start_date)) & (data['日期'] <= str(end_date))]
+    import pandas as pd
 
+    # 确保日期列是 datetime 类型
+    data['日期'] = pd.to_datetime(data['日期'])
+
+    # 将输入的日期也转为 datetime
+    start_date = pd.to_datetime(start_date)
+    end_date = pd.to_datetime(end_date)  # 示例结束日期
+
+    # 使用 datetime 比较
+    data = data[(data['日期'] >= start_date) & (data['日期'] <= end_date)]
     data['high_kdj'] = data['最高'].rolling(window = days, min_periods = 1).max()
     data['low_kdj'] = data['最低'].rolling(window = days, min_periods = 1).min()
     data['RSV'] = (data['收盘'] - data['low_kdj']) / (data['high_kdj'] - data['low_kdj']) * 100

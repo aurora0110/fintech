@@ -18,7 +18,6 @@ def backTest(file, amount, windows, total_shares, each_buy_shares, start_date, e
     #data_list = kdj.cal_KDJ(data, 9, 3, 3)
     # 时间戳
     log_content = f"[{datetime.now()}] 开始回测\n"
-
     df = pd.DataFrame(file, columns=['date', 'j_value', 'price', 'high_price', 'low_price']) # 以收盘价用作后续价格
     df = df[(df['date'] >= str(start_date)) & (df['date'] <= str(end_date))]
 
@@ -192,7 +191,7 @@ def backTest(file, amount, windows, total_shares, each_buy_shares, start_date, e
         if j >= len(buy_list):
             i += 1
             j = 0
-    avg_profit = sum(earning_results) / int(end_year - start_year) if earning_results else 0
+    avg_profit = sum(earning_results) / int(end_year - start_year) if earning_results else 1
     result['avg_profit'] = avg_profit
     #print(f'{start_date}到{end_date}平均年化收益: {round(avg_profit * 100, 3)}%，平均持有时长为：{round(sum(holddays_list) / len(holddays_list),1)}天')
     with open(backtest_log_path, 'a') as f:
