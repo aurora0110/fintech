@@ -14,6 +14,7 @@ import sys
 import backTest as bt
 import shakeoutMonitoring as som
 import os
+from utils import holdingConfig
 
 if __name__ == '__main__':
     # 读取参数
@@ -33,6 +34,7 @@ if __name__ == '__main__':
     downloadNewDataSwitch = config.downloadNewDataSwitch
     figSwitch = config.figSwitch
     bbi_days = config.bbi_days
+    holding_stock_codes = holdingConfig.stock_codes
 
     if not os.path.exists(backtest_log_path):
         os.makedirs(backtest_log_path)
@@ -71,6 +73,7 @@ if __name__ == '__main__':
     well_list = []
     ordinary_list = []
     select_list_J = []
+    select_list_J_sell = []
     select_list_JS = []
     select_list_JSBBI = []
     select_list_JM = []
@@ -133,6 +136,9 @@ if __name__ == '__main__':
         if data_kdj['J'].iloc[-1] <= -5:
             J_boolean = True
         
+        if data_kdj['J'].iloc[-1] >= 90 and symbol in holding_stock_codes:
+            select_list_J_sell.append(symbol)
+        
         if data_shakeout['短期'].iloc[-1] < 20 and data_shakeout['长期'].iloc[-1] > 60:
             SHAKEOUT_boolean = True
         
@@ -170,6 +176,7 @@ if __name__ == '__main__':
     stock_well_list = []
     stock_ordinary_list = []
     stock_select_list_J = []
+    stock_select_list_J_sell = []
     stock_select_list_JS = []
     stock_select_list_JSBBI = []
     stock_select_list_JM = []
@@ -231,6 +238,9 @@ if __name__ == '__main__':
 
         if data_kdj['J'].iloc[-1] <= -5:
             J_boolean = True
+
+        if data_kdj['J'].iloc[-1] >= 90 and symbol in holding_stock_codes:
+            stock_select_list_J_sell.append(symbol)
         
         if data_shakeout['短期'].iloc[-1] < 20 and data_shakeout['长期'].iloc[-1] > 60:
             SHAKEOUT_boolean = True
@@ -262,21 +272,21 @@ if __name__ == '__main__':
             f.write(f'*************当前回测策略为：可投入金额为{amount}元，最小操作间隔为{ineterval_days}天，计划操作手数为{total_shares}手*************')    
         print(f"⏰今日：{data.iloc[-1]['日期']}，{symbol}，收盘价为：{data.iloc[-1]['收盘']}，最高价为：{data.iloc[-1]['最高']}，最低价为：{data.iloc[-1]['最低']}，J值为：{round(data_kdj['J'].iloc[-1],3)}，MACD值为：{round(data_macd['DIF'].iloc[-1],3)}，单针下20短期指标为：{round(data_shakeout['短期'].iloc[-1],3)}，单针下20长期指标为：{round(data_shakeout['长期'].iloc[-1],3)}")
         print(f"💹技术指标：J值小于-5：{'true✅' if J_boolean else 'false❌'}，MACD指标：DIF水上：{'true✅' if MACD_boolean else 'false❌'}，单针下20短期指标小于20且单针下20长期指标大于60：{'true✅' if SHAKEOUT_boolean else 'false❌'}，最近连续{bbi_days}天的收盘价格大于bbi：{'true✅' if BBI_boolean else 'false❌'}")
-        print("🐤" * 100)
+        print("🐤" * 95)
 
     print("💗" * 40, "ETF 今日数据如下", "💗" * 40)
     print(f"ETF当前回测策略为：可投入金额💰为{amount}元，最小操作间隔为{ineterval_days}天，计划操作手数为{total_shares}手")
     print(f"✅ETF回测策略年化收益大于1️⃣0️⃣%有{len(well_list)}个：{well_list}，分别为：{well_list}")
     print(f"ETF回测策略年化收益小于1️⃣0️⃣%有{len(ordinary_list)}个：{ordinary_list}，分别为：{ordinary_list}")
-    print(f"✅ETF当日满足J值小于-5️⃣的ETF有{len(select_list_J)}个：{select_list_J}")
+    print(f"✅ETF当日满足J值小于-5️⃣的ETF有{len(select_list_J)}个：{select_list_J}，❗️持有且大于9️⃣0️⃣的有{len(select_list_J_sell)}个：{select_list_J_sell}")
     print(f"ETF当日满足J值小于-5️⃣的ETF,且MACD水上💦的有{len(select_list_JM)}个：{select_list_JM}")
     print(f"✅ETF当日满足J值小于-5️⃣，单针下20短期指标小于20且单针下20长期指标大于60的ETF有{len(select_list_JS)}个：{select_list_JS}")
     print(f"ETF当日满足J值小于-5️⃣，单针下20短期指标小于20且单针下20长期指标大于60，最近连续{bbi_days}天的收盘价格大于bbi的ETF有{len(select_list_JSBBI)}个：{select_list_JSBBI}")
     print("💗" * 40, "STOCK 今日数据如下", "💗" * 40)
     print(f"STOCK当前回测策略为：可投入金额💰为{amount}元，最小操作间隔为{ineterval_days}天，计划操作手数为{total_shares}手")
     print(f"✅STOCK回测策略年化收益大于1️⃣0️⃣%有{len(stock_well_list)}个：{stock_well_list}，分别为：{stock_well_list}")
-    print(f"STOCK回测策略年化收益小于1️⃣0️⃣%有{len(stock_ordinary_list)}个：{stock_ordinary_list}，分别为：{stock_ordinary_list}")
-    print(f"✅STOCK当日满足J值小于-5️⃣的有{len(stock_select_list_J)}个：{stock_select_list_J}")
+    print(f"STOCK回测策略年化收益小于1️⃣0️⃣%有{len(stock_ordinary_list)}个：{stock_ordinary_list}，分别为：{stock_ordinary_list}")   
+    print(f"✅STOCK当日满足J值小于-5️⃣的有{len(stock_select_list_J)}个：{stock_select_list_J}，❗️持有且大于9️⃣0️⃣的有{len(stock_select_list_J_sell)}个：{stock_select_list_J_sell}")
     print(f"STOCK当日满足J值小于-5️⃣的,且MACD水上💦的有{len(stock_select_list_JM)}个：{stock_select_list_JM}")
     print(f"✅STOCK当日满足J值小于-5️⃣，单针下20短期指标小于20且单针下20长期指标大于60的有{len(stock_select_list_JS)}个：{stock_select_list_JS}")
     print(f"STOCK当日满足J值小于-5️⃣，单针下20短期指标小于20且单针下20长期指标大于60，最近连续{bbi_days}天的收盘价格大于bbi的有{len(stock_select_list_JSBBI)}个：{stock_select_list_JSBBI}")
