@@ -93,8 +93,8 @@ def backTest(file, amount, windows, total_shares, each_buy_shares, start_date, e
             elif j_value >= 100:
                 sell_shares = 1
 
-            #elif j_value >= 90:
-                #sell_shares = 1
+            elif j_value >= 90:
+                sell_shares = 1
 
             #elif j_value >= 80:
                 #sell_shares = 1

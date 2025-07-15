@@ -394,9 +394,9 @@ class StockAnalyzer:
         print(f"数据已保存至：{filename}")
     
     
-
 # 示例调用
 if __name__ == "__main__":
+    '''
     ticker = '600036.SS'
     file_path = '/Users/lidongyang/Desktop/MyInvestStrategy/GridStrategy/data/000001.csv'  # 替换为你的路径
 
@@ -407,5 +407,5 @@ if __name__ == "__main__":
     macd = analyzer.calculate_macd()
     price = analyzer.calculate_price()
     shakeout = analyzer.calculate_shakeout()
-    print(len(shakeout))
     analyzer.plot_all(ma, bbi, price, macd, kdj, shakeout, '000001', windows=[20, 30, 60, 120])
+    '''

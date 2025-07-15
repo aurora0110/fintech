@@ -14,6 +14,7 @@ import sys
 import backTest as bt
 import shakeoutMonitoring as som
 import os
+from StockAnalyzer import StockAnalyzer
 from utils import holdingConfig
 
 if __name__ == '__main__':
@@ -38,7 +39,6 @@ if __name__ == '__main__':
 
     if not os.path.exists(backtest_log_path):
         os.makedirs(backtest_log_path)
-
 
     logging.basicConfig(
     level=logging.INFO,
@@ -108,6 +108,7 @@ if __name__ == '__main__':
         ctr.cal_volatility(data, day_window)
         atr = ctr.cal_ATR(data, day_window)
 
+        '''
         # 计算MA bbi均线并画图
         data_ma = cm.calculate_moving_averages(data, etf_start_date, end_date, windows)
         # cm.plot_moving_averages(data_ma, symbol, colors, 'MA')
@@ -123,6 +124,17 @@ if __name__ == '__main__':
         # 画图
         if figSwitch:
             cm.plot_all(data_ma, data_bbi, data_price, data_macd, data_kdj, data_shakeout, symbol, windows)
+        '''
+        analyzer = StockAnalyzer(symbol, file_path)
+        data_ma = analyzer.calculate_moving_averages()
+        data_bbi = analyzer.calculate_bbi()
+        data_kdj = analyzer.calculate_kdj()
+        data_macd = analyzer.calculate_macd()
+        data_price = analyzer.calculate_price()
+        data_shakeout = analyzer.calculate_shakeout()
+        # 画图
+        if figSwitch:
+            analyzer.plot_all(data_ma, data_bbi, data_price, data_macd, data_kdj, data_shakeout, symbol, windows=[20, 30, 60, 120])
 
         # 计算回测收益，策略：每到j值满足条件就买入或者卖出
         data_input = []
@@ -212,6 +224,7 @@ if __name__ == '__main__':
         ctr.cal_volatility(data, day_window)
         atr = ctr.cal_ATR(data, day_window)
 
+        '''
         # 计算MA bbi均线并画图
         data_ma = cm.calculate_moving_averages(data, stock_start_date, end_date, windows)
         # cm.plot_moving_averages(data_ma, symbol, colors, 'MA')
@@ -227,6 +240,17 @@ if __name__ == '__main__':
         # 画图
         if figSwitch:
             cm.plot_all(data_ma, data_bbi, data_price, data_macd, data_kdj, data_shakeout, symbol, windows)
+        '''
+        analyzer = StockAnalyzer(symbol, file_path)
+        data_ma = analyzer.calculate_moving_averages()
+        data_bbi = analyzer.calculate_bbi()
+        data_kdj = analyzer.calculate_kdj()
+        data_macd = analyzer.calculate_macd()
+        data_price = analyzer.calculate_price()
+        data_shakeout = analyzer.calculate_shakeout()
+        # 画图
+        if figSwitch:
+            analyzer.plot_all(data_ma, data_bbi, data_price, data_macd, data_kdj, data_shakeout, symbol, windows=[20, 30, 60, 120])
 
         # 计算回测收益，策略：每到j值满足条件就买入或者卖出
         data_input = []
@@ -250,12 +274,6 @@ if __name__ == '__main__':
         # 筛选MACD在水上的
         if data_macd['DIF'].iloc[-1] > 0:
             MACD_boolean = True
-        
-        # 卖出信号，比较当日价格是否跌破BBI，跌破则为卖出信号
-        today_bbi = data_bbi['bbi'].tail(1).reset_index(drop=True)
-        today_price = data['最高'].tail(1).reset_index(drop=True)
-        if today_price < today_bbi:
-            FALLBBI_signal = True
 
         # 比较价格满足大于bbi，并且最近10天的收盘价格大于bbi
         bbi_last = data_bbi['bbi'].tail(bbi_days).reset_index(drop=True)
@@ -294,18 +312,11 @@ if __name__ == '__main__':
     print(f"STOCK当前回测策略为：可投入金额💰为{amount}元，最小操作间隔为{ineterval_days}天，计划操作手数为{total_shares}手")
     print(f"✅STOCK回测策略年化收益大于1️⃣0️⃣%有{len(stock_well_list)}个：{stock_well_list}，分别为：{stock_well_list}")
     print(f"STOCK回测策略年化收益小于1️⃣0️⃣%有{len(stock_ordinary_list)}个：{stock_ordinary_list}，分别为：{stock_ordinary_list}")   
-    print(f"✅STOCK当日满足J值小于-5️⃣的有{len(stock_select_list_J)}个：{stock_select_list_J}，❗️持有且大于9️⃣0️⃣的有{len(stock_select_list_J_sell)}个：{stock_select_list_J_sell}，❗️是否跌破BBI线：{'true✅' if FALLBBI_signal else 'false❌'}")
+    print(f"✅STOCK当日满足J值小于-5️⃣的有{len(stock_select_list_J)}个：{stock_select_list_J}，❗️持有且大于9️⃣0️⃣的有{len(stock_select_list_J_sell)}个：{stock_select_list_J_sell}")
     print(f"STOCK当日满足J值小于-5️⃣的,且MACD水上💦的有{len(stock_select_list_JM)}个：{stock_select_list_JM}")
     print(f"✅STOCK当日满足J值小于-5️⃣，单针下20短期指标小于20且单针下20长期指标大于60的有{len(stock_select_list_JS)}个：{stock_select_list_JS}")
     print(f"STOCK当日满足J值小于-5️⃣，单针下20短期指标小于20且单针下20长期指标大于60，最近连续{bbi_days}天的收盘价格大于bbi的有{len(stock_select_list_JSBBI)}个：{stock_select_list_JSBBI}")
 
-    '''
-
-    j <-5 买，j >= 100卖：回测策略年化收益大于5%有18个：[['sh515450', '33.15%'], ['sh563300', '8.727%'], ['sh512580', '11.72%'], ['sh588000', '43.853%'], ['sz159985', '34.575%'], ['sh520990', '22.023%'], ['sh510300', '8.248%'], ['sh510050', '5.664%'], ['sh518880', '15.299%'], ['sh512660', '54.898%'], ['sh512100', '31.273%'], ['sh512170', '6.721%'], ['sh513180', '29.988%'], ['sz159920', '19.895%'], ['sh512980', '58.359%'], ['sh515180', '23.133%'], ['sh512880', '21.619%'], ['sh512070', '43.714%']]
-    j <-5 买，j >= 90卖：回测策略年化收益大于5%有19个：[['sh515450', '23.494%'], ['sh563300', '8.368%'], ['sh512580', '21.007%'], ['sh588000', '46.655%'], ['sz159985', '24.288%'], ['sh520990', '18.806%'], ['sh510300', '10.157%'], ['sh510050', '10.294%'], ['sh518880', '12.595%'], ['sh512660', '52.128%'], ['sh512100', '17.886%'], ['sh512170', '27.299%'], ['sh513180', '36.293%'], ['sz159920', '28.681%'], ['sh512980', '33.322%'], ['sh515180', '19.142%'], ['sz159938', '16.125%'], ['sh512880', '33.652%'], ['sh512070', '33.672%']]
-    j <-5 买，j >= 80卖：回测策略年化收益大于5%有19个：[['sh515450', '20.666%'], ['sh563300', '8.368%'], ['sh512580', '23.326%'], ['sh588000', '44.329%'], ['sz159985', '19.201%'], ['sh520990', '18.573%'], ['sh510300', '10.578%'], ['sh510050', '8.167%'], ['sh518880', '10.802%'], ['sh512660', '42.412%'], ['sh512100', '16.21%'], ['sh512170', '35.676%'], ['sh513180', '31.666%'], ['sz159920', '23.266%'], ['sh512980', '33.456%'], ['sh515180', '15.083%'], ['sz159938', '20.701%'], ['sh512880', '28.0%'], ['sh512070', '19.654%']]
-
-    '''
 
 
 
