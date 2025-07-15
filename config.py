@@ -18,10 +18,10 @@ stock_symbol_list = ["000001","000969","000997","002639","002104","002460","0025
                      ,"600886","601288","601398","601066"]
 
 # 存量数据路径和计算年份
-file_path = '/Users/lidongyang/Desktop/MYINVESTSTRATEGY/'
+file_path = '/Users/lidongyang/Desktop/MyInvestStrategy/GridStrategy/data/' # /Users/lidongyang/Desktop/MYINVESTSTRATEGY/
 
 # 回测日志写入路径
-backtest_log_path = "/Users/lidongyang/Desktop/MYINVESTSTRATEGY/GridStrategy/logs/backTest/"
+backtest_log_path = "/Users/lidongyang/Desktop/MYINVESTSTRATEGY/GridStrategy/logs/backTest/" # /Users/lidongyang/Desktop/MYINVESTSTRATEGY/GridStrategy/logs/backTest/
 
 # 均线窗口
 windows=[20, 30, 60, 120]
@@ -33,7 +33,7 @@ colors = ['orange', 'green', 'red', 'blue']
 now = datetime.now()
 end_date = now.strftime("%Y%m%d")
 
-etf_years_ago =  now - relativedelta(years=5) # 获取5年前的日期
+etf_years_ago =  now - relativedelta(years=1) # 获取5年前的日期
 etf_start_date = etf_years_ago.strftime("%Y%m%d")
 
 stock_years_ago =  now - relativedelta(years=1) # 获取1年前的日期

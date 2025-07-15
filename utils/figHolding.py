@@ -7,7 +7,7 @@ from datetime import date
 sns.set(style="whitegrid")
 current_date = date.today()
 
-def draw_pretty_position_chart(stock_codes, holdings, title="10w Plan Holding Chart " + str(current_date), save_path=None):
+def draw_pretty_position_chart(stock_codes, holdings, title="100w Plan Holding Chart " + str(current_date), save_path=None):
     sorted_data = sorted(zip(stock_codes, holdings), key=lambda x: x[1], reverse=True)
     stock_codes_sorted, holdings_sorted = zip(*sorted_data)
 
@@ -35,14 +35,16 @@ def draw_pretty_position_chart(stock_codes, holdings, title="10w Plan Holding Ch
 
     # ✅ 注释文本（右上角）
     # 使用 `fig.text` 而不是 `ax.text`，避免被坐标轴裁切
+    '''
     fig.text(
         0.96, 0.96,  # 相对于整个画布的右上角
         "input strategy",
         ha='right',
         va='top',
         fontsize=12,
-        color='darkred'
+        color='gray'
     )
+    '''
 
     ax.set_xlabel("amount", fontsize=12)
     ax.set_ylabel("code", fontsize=12)
@@ -73,7 +75,7 @@ def draw_pretty_position_chart(stock_codes, holdings, title="10w Plan Holding Ch
     plt.show()
 
 # 示例输入
-stock_codes = holdingConfig.stock_codes_20250709
-holdings = holdingConfig.holdings_20250709
+stock_codes = holdingConfig.stock_codes
+holdings = holdingConfig.holdings
 
 draw_pretty_position_chart(stock_codes, holdings)

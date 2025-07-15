@@ -32,6 +32,9 @@ def calculate_moving_averages(data, start_date, end_date, windows=[20, 60, 120])
     :return: 添加了均线列的DataFrame
     """
     data = data[(data['日期'] >= start_date) & (data['日期'] <= end_date)]
+        # 将输入的日期也转为 datetime
+    start_date = pd.to_datetime(start_date)
+    end_date = pd.to_datetime(end_date)  # 示例结束日期
 
     windows.append(0) # 添加0周期，增加一个循环添加上日期
     result_kv = {}
@@ -128,145 +131,6 @@ def plot_moving_averages(data, ticker, colors, type):
 
 # 4.多张图汇集在一张画板上
 def plot_all(data_ma, data_bbi, data_price, data_macd, data_kdj, data_shakeout, ticker, windows):
-    '''
-    # 创建画板
-    plt.figure(figsize=(14, 10))
-    plt.suptitle(f'{ticker}', fontsize = 10)
-
-    x_axis = data_ma['date'].tolist()
-
-    # 第一张图 ma
-    ax1 = plt.subplot2grid((4,2),(0,0))
-
-    ax1.plot(x_axis, data_ma[f'MA_{windows[0]}'], 'r-', label=f'MA_{windows[0]}')
-    ax1.plot(x_axis, data_ma[f'MA_{windows[1]}'], 'b-', label=f'MA_{windows[1]}')
-    ax1.plot(x_axis, data_ma[f'MA_{windows[2]}'], 'g-', label=f'MA_{windows[2]}')
-    ax1.set_title(f'MA {windows[0]} {windows[1]} {windows[2]}')
-    #ax1.set_xlabel('date')
-    ax1.set_ylabel('price')
-    ax1.grid(True, linestyle='--', linewidth=0.2, alpha=1)  # 增加网格线
-    # 手动设置步长
-    step = 50
-    # 选择x轴上的刻度
-    selected_ticks = x_axis[::step]
-    plt.tight_layout()
-    plt.xticks(selected_ticks, rotation=10)
-    ax1.legend()
-
-    # 第二张图 bbi
-    ax2 = plt.subplot2grid((4,2),(0,1))
-    ax2.plot(x_axis, data_bbi['bbi'], 'r-', label='bbi')
-    ax2.set_title('bbi')
-    #ax2.set_xlabel('date')
-    ax2.set_ylabel('price')
-    ax2.grid(True, linestyle='--', linewidth=0.2, alpha=1)  # 增加网格线
-    # 手动设置步长
-    step = 50
-    # 选择x轴上的刻度
-    selected_ticks = x_axis[::step]
-    plt.tight_layout()
-    plt.xticks(selected_ticks, rotation=10)
-    ax2.legend()
-
-    # 第三张图 price
-    ax3 = plt.subplot2grid((4,2),(1,0),colspan=2)
-    ax3.plot(x_axis, data_price['avg_price'], 'r-', label='avg_price')
-    ax3.plot(x_axis, data_price['close_price'], 'b-', label='close_price')
-    ax3.set_title('avg & close price')
-    #ax3.set_xlabel('date')
-    ax3.set_ylabel('price')
-    ax3.grid(True, linestyle='--', linewidth=0.2, alpha=1)  # 增加网格线
-    # 手动设置步长
-    step = 50
-    # 选择x轴上的刻度
-    selected_ticks = x_axis[::step]    
-    plt.tight_layout()
-    plt.xticks(selected_ticks, rotation=10) 
-    ax3.legend()
-
-    # 第四张图 macd
-    ax4 = plt.subplot2grid((4,2),(2,0),colspan=2)
-    ax4.plot(x_axis, data_macd['DIF'], 'r-', label='DIF') # 快白线
-    ax4.plot(x_axis, data_macd['DEA'], 'y-', label='DEA') # 慢黄线
-    ax4.set_title('macd')
-    #ax3.set_xlabel('date')
-    ax4.set_ylabel('')
-    ax4.grid(True, linestyle='--', linewidth=0.2, alpha=1)  # 增加网格线
-    # 手动设置步长
-    step = 50
-    # 选择x轴上的刻度
-    selected_ticks = x_axis[::step]
-    plt.tight_layout()
-    plt.xticks(selected_ticks, rotation=10) 
-    ax4.legend()
-
-    # 第五张图 j
-    # 1. 转换 x_axis 为 datetime 类型
-    x_axis_dt = pd.to_datetime(x_axis).to_pydatetime()
-
-    # 2. 条件掩码
-    mask_low = data_kdj['J'] <= -5
-    mask_high = data_kdj['J'] > 80
-
-    # 3. 对应点
-    highlight_x_low = [x for x, m in zip(x_axis_dt, mask_low) if m]
-    highlight_y_low = data_kdj['J'][mask_low]
-
-    highlight_x_high = [x for x, m in zip(x_axis_dt, mask_high) if m]
-    highlight_y_high = data_kdj['J'][mask_high]
-
-    # 4. 绘图
-    ax5 = plt.subplot2grid((4,2),(3,0),colspan=2)
-    ax5.xaxis_date()
-
-    # 主曲线
-    ax5.plot(x_axis_dt, data_kdj['J'], label='KDJ-J', color='blue')
-
-    # 5. 标注低点（红色）
-    ax5.scatter(highlight_x_low, highlight_y_low, color='red', zorder=5)
-    for date, val in zip(highlight_x_low, highlight_y_low):
-        ax5.annotate(
-            f'{val:.2f}',
-            xy=(date, val),
-            xytext=(date, val + 0.5),
-            arrowprops=dict(facecolor='red', arrowstyle='->'),
-            ha='center',
-            va='bottom',
-            fontsize=9,
-            color='red'
-        )
-
-    # 6. 标注高点（绿色）
-    ax5.scatter(highlight_x_high, highlight_y_high, color='green', zorder=5)
-    for date, val in zip(highlight_x_high, highlight_y_high):
-        ax5.annotate(
-            f'{val:.2f}',
-            xy=(date, val),
-            xytext=(date, val + 0.5),
-            arrowprops=dict(facecolor='green', arrowstyle='->'),
-            ha='center',
-            va='bottom',
-            fontsize=9,
-            color='green'
-        )
-
-    # 7. 美化图表
-    ax5.set_title('KDJ-J Highlighted Points')
-    ax5.set_xlabel('Date')
-    ax5.set_ylabel('J Value')
-    ax5.text(2, 5, f'J<-5的值有：{len(highlight_x_low)}个, J>80的值有：{len(highlight_x_high)}个', fontsize=15, color='brown') # 增加图片注释
-    ax5.legend()
-
-    # 手动设置步长
-    step = 50
-    # 选择x轴上的刻度
-    selected_ticks = x_axis[::step]
-    plt.xticks(selected_ticks, rotation=10)
-    # 自动调整坐标、标题位置，避免重合
-    plt.tight_layout()
-    plt.show()
-    '''
-
     # x_axis 是形如 ['2020-01-01', ...] 的字符串列表
     x_axis = pd.to_datetime(data_ma['date'])
 

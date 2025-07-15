@@ -162,7 +162,7 @@ def batch_download_etf_data(symbol_list, days, start_date, end_date, year_interv
             print(f"批量获取fund：{symbol}历史数据失败")
     return all_data
 
-def save_2_csv(data, symbol):
+def save_2_csv(data, symbol, file_path):
     """
     保存数据到单个csv文件
     :param data: 数据
@@ -170,7 +170,7 @@ def save_2_csv(data, symbol):
     :return: None
     """
     print(f"正在保存{symbol}数据到csv文件...")
-    data.to_csv(f"{symbol}.csv")
+    data.to_csv(file_path + f"{symbol}.csv")
 
 def read_from_csv(file_path):
     """

@@ -39,6 +39,7 @@ if __name__ == '__main__':
     if not os.path.exists(backtest_log_path):
         os.makedirs(backtest_log_path)
 
+
     logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -62,11 +63,11 @@ if __name__ == '__main__':
         category_name = "全市场etf目录" + now_date
         data_new = getData.batch_download_etf_data(etf_symbol_list, "all", etf_start_date, end_date, 5)
         for key, value in data_new.items():
-            getData.save_2_csv(value, key)
+            getData.save_2_csv(value, key, file_path)
 
         stock_data = getData.batch_download_stock_data(stock_symbol_list, days="all", start_date=stock_start_date, end_date=end_date, year_interval=1)
         for key, value in stock_data.items():
-            getData.save_2_csv(value, key)
+            getData.save_2_csv(value, key, file_path)
 
 
     # 回测策略年化收益大于5%
@@ -187,6 +188,7 @@ if __name__ == '__main__':
         SHAKEOUT_boolean = False
         BBI_boolean = False
         MACD_boolean = False
+        FALLBBI_signal = False
         file_path = config.file_path 
         file_path = file_path + symbol + ".csv"
         backtest_log_path_new = backtest_log_path + symbol + ".txt"
@@ -249,6 +251,12 @@ if __name__ == '__main__':
         if data_macd['DIF'].iloc[-1] > 0:
             MACD_boolean = True
         
+        # 卖出信号，比较当日价格是否跌破BBI，跌破则为卖出信号
+        today_bbi = data_bbi['bbi'].tail(1).reset_index(drop=True)
+        today_price = data['最高'].tail(1).reset_index(drop=True)
+        if today_price < today_bbi:
+            FALLBBI_signal = True
+
         # 比较价格满足大于bbi，并且最近10天的收盘价格大于bbi
         bbi_last = data_bbi['bbi'].tail(bbi_days).reset_index(drop=True)
         price_last = data['收盘'].tail(bbi_days).reset_index(drop=True)
@@ -286,7 +294,7 @@ if __name__ == '__main__':
     print(f"STOCK当前回测策略为：可投入金额💰为{amount}元，最小操作间隔为{ineterval_days}天，计划操作手数为{total_shares}手")
     print(f"✅STOCK回测策略年化收益大于1️⃣0️⃣%有{len(stock_well_list)}个：{stock_well_list}，分别为：{stock_well_list}")
     print(f"STOCK回测策略年化收益小于1️⃣0️⃣%有{len(stock_ordinary_list)}个：{stock_ordinary_list}，分别为：{stock_ordinary_list}")   
-    print(f"✅STOCK当日满足J值小于-5️⃣的有{len(stock_select_list_J)}个：{stock_select_list_J}，❗️持有且大于9️⃣0️⃣的有{len(stock_select_list_J_sell)}个：{stock_select_list_J_sell}")
+    print(f"✅STOCK当日满足J值小于-5️⃣的有{len(stock_select_list_J)}个：{stock_select_list_J}，❗️持有且大于9️⃣0️⃣的有{len(stock_select_list_J_sell)}个：{stock_select_list_J_sell}，❗️是否跌破BBI线：{'true✅' if FALLBBI_signal else 'false❌'}")
     print(f"STOCK当日满足J值小于-5️⃣的,且MACD水上💦的有{len(stock_select_list_JM)}个：{stock_select_list_JM}")
     print(f"✅STOCK当日满足J值小于-5️⃣，单针下20短期指标小于20且单针下20长期指标大于60的有{len(stock_select_list_JS)}个：{stock_select_list_JS}")
     print(f"STOCK当日满足J值小于-5️⃣，单针下20短期指标小于20且单针下20长期指标大于60，最近连续{bbi_days}天的收盘价格大于bbi的有{len(stock_select_list_JSBBI)}个：{stock_select_list_JSBBI}")
