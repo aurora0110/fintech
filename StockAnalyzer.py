@@ -32,8 +32,11 @@ class StockAnalyzer:
         if not path.exists():
             raise FileNotFoundError(f"文件{path}不存在")
         try:
-            data = pd.read_excel(self.file_path, engine=None)
-            data = data[(data['日期'] >= self.start_date) & (data['日期'] <= self.end_date)]
+            data = pd.read_csv(self.file_path, engine=None)
+            data['日期'] = pd.to_datetime(data['日期'])
+            start_date = pd.to_datetime(self.start_date)
+            end_date = pd.to_datetime(self.end_date)
+            data = data[(data['日期'] >= start_date) & (data['日期'] <= end_date)]
             return data
         except Exception as e:
             print(f"读取文件{path}失败，错误信息：{e}")
@@ -74,7 +77,7 @@ class StockAnalyzer:
             'high_110': lambda j: j >= 110,
             'high_120': lambda j: j >= 120,
         }
-
+        fast_down_j_label = False
         # 初始化结果字典
         ret_kdj_dict = {key: [] for key in thresholds}
 
@@ -87,6 +90,9 @@ class StockAnalyzer:
                 if condition(j_val):
                     ret_kdj_dict[key].append(row_data)
 
+        # 筛选三天内J快速下降
+        if data_list[-1][1] < 10 and data_list[-3][1] > 80:
+            fast_down_j_label = True
         # 整理为列表（按 thresholds 的顺序）
         ret_kdj = [ret_kdj_dict[key] for key in thresholds]
 
@@ -95,7 +101,8 @@ class StockAnalyzer:
             'K': df['K'],
             'D': df['D'],
             'J': df['J'],
-            'ret_kdj': ret_kdj
+            'ret_kdj': ret_kdj,
+            'fast_down_j_label': fast_down_j_label
         }
 
     def calculate_moving_averages(self):
@@ -160,24 +167,24 @@ class StockAnalyzer:
         # 买点条件
         df['四线归零买'] = np.where(
             (df['短期'] <= 6) & (df['中期'] <= 6) & (df['中长期'] <= 6) & (df['长期'] <= 6),
-            -30, 0)
+            1, 0)
 
         df['白线下20买'] = np.where(
             (df['短期'] <= 20) & (df['长期'] >= 60),
-            -30, 0)
+            1, 0)
 
         # 白穿红线买（金叉）
         df['白穿红线买'] = np.where(
             (df['短期'] > df['长期']) & (df['短期'].shift(1) <= df['长期'].shift(1)) & (df['长期'] < 20),
-            -30, 0)
+            1, 0)
 
         # 白穿黄线买（金叉）
         df['白穿黄线买'] = np.where(
             (df['短期'] > df['中期']) & (df['短期'].shift(1) <= df['中期'].shift(1)) & (df['中期'] < 30),
-            -30, 0)
+            1, 0)
 
         # 输出最后几行查看
-        df[['短期', '中期', '中长期', '长期', '四线归零买', '白线下20买', '白穿红线买', '白穿黄线买']].tail()
+        #print(df[['短期', '中期', '中长期', '长期', '四线归零买', '白线下20买', '白穿红线买', '白穿黄线买']].tail())
 
         return df
 
@@ -245,7 +252,7 @@ class StockAnalyzer:
         fig.add_trace(go.Scatter(x=x_axis, y=data_price['close_price'], name='close_price', line=dict(color='green')), row=2, col=1)
 
         # 第三行，整行 KDJ-J + 高亮点
-        fig.add_trace(go.Scatter(x=x_axis, y=data_kdj['J'], name='KDJ-J', line=dict(color='blue')), row=3, col=1)
+        fig.add_trace(go.Scatter(x=x_axis, y=data_kdj['J'], name='KDJ-J', line=dict(color='yellow')), row=3, col=1)
 
         mask_low = data_kdj['J'] <= -5
         fig.add_trace(go.Scatter(
@@ -276,7 +283,7 @@ class StockAnalyzer:
         fig.add_trace(go.Scatter(x=x_axis, y=data_macd['DEA'], name='DEA', line=dict(color='yellow')), row=4, col=1)
 
         # 第五行，左图 -10～90
-        fig.add_trace(go.Scatter(x=x_axis, y=data_kdj['J'], name='KDJ-J', line=dict(color='blue')), row=5, col=1)
+        fig.add_trace(go.Scatter(x=x_axis, y=data_kdj['J'], name='KDJ-J', line=dict(color='yellow')), row=5, col=1)
 
         mask_low = data_kdj['J'] <= -10
         fig.add_trace(go.Scatter(
@@ -303,7 +310,7 @@ class StockAnalyzer:
         ), row=5, col=1)
 
         # 第五行，右图 -15～100
-        fig.add_trace(go.Scatter(x=x_axis, y=data_kdj['J'], name='KDJ-J', line=dict(color='blue')), row=5, col=2)
+        fig.add_trace(go.Scatter(x=x_axis, y=data_kdj['J'], name='KDJ-J', line=dict(color='yellow')), row=5, col=2)
 
         mask_low = data_kdj['J'] <= -15
         fig.add_trace(go.Scatter(
@@ -393,10 +400,50 @@ class StockAnalyzer:
         self.ma_data.to_csv(filename, index=False)
         print(f"数据已保存至：{filename}")
     
+class StockMonitor:
+    def __init__(self, ticker, file_path, start_date=None, end_date=None):
+        self.ticker = ticker
+        self.file_path = file_path
+        self.start_date = start_date
+        self.end_date = end_date
     
+    def fastdown_J(self):
+        analyzer = StockAnalyzer(self.ticker, self.file_path)
+        data_kdj = analyzer.calculate_kdj()
+        label = False
+        if (data_kdj['J'].iloc[-1] < 10 and data_kdj['J'].iloc[-3] > 70) or (data_kdj['J'].iloc[-1] < 5 and data_kdj['J'].iloc[-3] > 65) or (data_kdj['J'].iloc[-1] < 0 and data_kdj['J'].iloc[-3] > 60):
+            label = True
+        
+        label = all(
+        any([
+            (data_kdj['J'].iloc[-1] < 10 and data_kdj['J'].iloc[period] > 70),  
+            (data_kdj['J'].iloc[-1] < 5 and data_kdj['J'].iloc[period] > 65),  
+            (data_kdj['J'].iloc[-1] < 0 and data_kdj['J'].iloc[period] > 60) 
+        ])
+        for period in [-1, -2, -3] )
+        print(f"{self.ticker}J值是否快速下降：{'true✅' if label else 'false❌'}，最近3️⃣天的J值：{round(data_kdj['J'].iloc[-3],1)}，{round(data_kdj['J'].iloc[-2],1)}，{round(data_kdj['J'].iloc[-1],1)}")
+
+        return label
+
+    def continuous_shakeout(self):
+        analyzer = StockAnalyzer(self.ticker, self.file_path)
+        data_shakeout = analyzer.calculate_shakeout()
+        label = False
+        label = all(
+        any([
+            data_shakeout.iloc[period].get("四线归零买", False) == 1,
+            data_shakeout.iloc[period].get("白线下20买", False) == 1,
+            data_shakeout.iloc[period].get("白穿红线买", False) == 1,
+            data_shakeout.iloc[period].get("白穿黄线买", False) == 1
+        ])
+        for period in [-1, -2, -3] )
+        print(f"{self.ticker}洗盘指标：{data_shakeout.iloc[-3][-4:], data_shakeout.iloc[-2][-4:], data_shakeout.iloc[-1][-4:]}")
+
+        return label
+
 # 示例调用
 if __name__ == "__main__":
-    '''
+    
     ticker = '600036.SS'
     file_path = '/Users/lidongyang/Desktop/MyInvestStrategy/GridStrategy/data/000001.csv'  # 替换为你的路径
 
@@ -407,5 +454,8 @@ if __name__ == "__main__":
     macd = analyzer.calculate_macd()
     price = analyzer.calculate_price()
     shakeout = analyzer.calculate_shakeout()
-    analyzer.plot_all(ma, bbi, price, macd, kdj, shakeout, '000001', windows=[20, 30, 60, 120])
-    '''
+    jlabel = StockMonitor(ticker, file_path).fastdown_J()
+    shakeout_label = StockMonitor(ticker, file_path).continuous_shakeout()
+    print(jlabel, shakeout_label)
+    #analyzer.plot_all(ma, bbi, price, macd, kdj, shakeout, '000001', windows=[20, 30, 60, 120])
+    

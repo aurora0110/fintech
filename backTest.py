@@ -17,7 +17,6 @@ def backTest(file, amount, windows, total_shares, each_buy_shares, start_date, e
     #data = pd.read_csv(file_path)
     #data_list = kdj.cal_KDJ(data, 9, 3, 3)
     # 时间戳
-    log_content = f"[{datetime.now()}] 开始回测\n"
     df = pd.DataFrame(file, columns=['date', 'j_value', 'price', 'high_price', 'low_price']) # 以收盘价用作后续价格
     df = df[(df['date'] >= str(start_date)) & (df['date'] <= str(end_date))]
 

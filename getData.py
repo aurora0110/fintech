@@ -2,14 +2,17 @@ import akshare as ak
 import pandas as pd
 from pathlib import Path
 import os
-import config
 from datetime import datetime
+import time
+from tqdm import tqdm
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import config
 
-def download_stock_data(symbol, type, start_date, end_date):
+
+def download_stock_data(symbol, start_date, end_date, adjust='qfq'):
     """
     获取市场某只股票数据
     :param symbol: 股票代码
-    :param type: etf or stock
     :param start_date: 开始日期
     :param end_date: 结束日期
     :param adjust：qfq（计算技术指标） or hfq（计算分红）
@@ -22,16 +25,14 @@ def download_stock_data(symbol, type, start_date, end_date):
             #stock_data = ak.stock_zh_a_hist(symbol= "000001",period= "daily",start_date= "19980101",end_date= "20500101",adjust= "",timeout = None)
             print('stock_data:', stock_data)
             return stock_data
-        else:
-            print("No This Type")
     except Exception as e:
         print(f"获取数据失败: {str(e)}")
         return None
 
 def download_stock_category():
     df_a = ak.stock_info_a_code_name().assign(market="A股")
-    print(df_a)
-    return df_a
+    df_list = df_a['code'].tolist()
+    return df_list
 
 def download_etf_data(symbol):
     """
@@ -106,7 +107,7 @@ def batch_download_stock_data(symbol_list, days, start_date, end_date, year_inte
     all_data = {}
 
     for symbol in symbol_list:
-        history_stock_data = download_stock_data(symbol=symbol, type="stock", start_date=start_date, end_date=end_date)
+        history_stock_data = download_stock_data(symbol=symbol, start_date=start_date, end_date=end_date, adjust="qfq")
 
         if history_stock_data is not None or history_stock_data is not None: 
             if days == "all": 
@@ -140,16 +141,14 @@ def batch_download_etf_data(symbol_list, days, start_date, end_date, year_interv
 
     for symbol in symbol_list:
         history_etf_data = download_etfHistory_data(type="etf", symbol=symbol, start_date=start_date, end_date=end_date)
-        history_lof_data = download_etfHistory_data(type="lof", symbol=symbol, start_date=start_date, end_date=end_date)
+        #history_lof_data = download_etfHistory_data(type="lof", symbol=symbol, start_date=start_date, end_date=end_date)
 
-        if history_etf_data is not None or history_lof_data is not None: 
+        if history_etf_data is not None: 
             if days == "all": 
                 if history_etf_data is not None:
                     # 获取所有时间段etf数据
                     all_data[symbol] = history_etf_data
-                else:
-                    # 获取所有时间段lof数据
-                    all_data[symbol] = history_lof_data
+
             else:
                 if history_etf_data is not None:
                     # 获取最近N天数据
@@ -189,7 +188,7 @@ def read_from_csv(file_path):
         return pd.read_csv(path, encoding="utf-8")
 
 if __name__ == '__main__':
-   
+    
     # 获取etf历史数据使用实例
     category_name = "全市场etf目录0612"
     symbol = config.symbol # symbol 调用em东方财富接口不用加前缀，调用sina新浪接口要加上市场前缀 sh sz
@@ -203,9 +202,5 @@ if __name__ == '__main__':
     # 获取A股全部股票目录
     #df = download_stock_category()
 
-    # 获取某只股票的历史记录
-    stock_data = batch_download_stock_data(symbol_list, days="all", start_date=stock_start_date, end_date=end_date, year_interval=1)
-    for key, value in stock_data.items():
-        save_2_csv(value, key)
 
 
