@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <title>网格交易计算器</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/font-awesome/css/font-awesome.min.css">
+    <link rel="stylesheet" href="https://gcore.jsdelivr.net/npm/lxgw-wenkai-webfont@1/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+    <link rel="icon" type="image/png" href="images/logo.png">
+    <style>
+        body {
+            background: #f4f6fa;
+            min-height: 100vh;
+            margin: 0;
+            font-family: 'LXGW WenKai', 'Segoe UI', 'Arial', sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .container {
+            background: #fff;
+            border-radius: 16px;
+            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+            padding: 36px 40px 30px 40px;
+            margin: 40px 0;
+            min-width: 900px;
+            max-width: 98vw;
+        }
+
+        h2 {
+            text-align: center;
+            color: #2d3a4b;
+            margin-bottom: 18px;
+        }
+
+        .input-table,
+        .result-table {
+            border-collapse: collapse;
+            width: 100%;
+            margin-bottom: 24px;
+        }
+
+        .input-table td,
+        .result-table td,
+        .result-table th {
+            border: 1px solid #e0e6ed;
+            padding: 10px 8px;
+            font-size: 15px;
+        }
+
+        .input-table td.label {
+            background: #f0f2f5;
+            color: #3a4a5b;
+            font-weight: 500;
+            width: 120px;
+            text-align: right;
+            border-radius: 6px 0 0 6px;
+        }
+
+        .input-table td.input {
+            background: #f8fafc;
+            border-radius: 0 6px 6px 0;
+            position: relative;
+            min-width: 160px;
+        }
+
+        .input-unit {
+            position: absolute;
+            right: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #888;
+            font-size: 13px;
+            /* pointer-events: none; */
+        }
+
+        .input-table input[type="number"] {
+            width: 80px;
+            padding: 6px 36px 6px 8px;
+            font-size: 15px;
+            border: 1px solid #d0d6de;
+            border-radius: 4px;
+            outline: none;
+            text-align: right;
+            background: #fff;
+            transition: border 0.2s;
+        }
+
+        .input-table input[type="number"]:focus {
+            border: 1.5px solid #4a90e2;
+        }
+
+        .tooltip {
+            display: inline-block;
+            position: relative;
+            cursor: pointer;
+            margin-left: 4px;
+            color: #4a90e2;
+        }
+
+        .tooltip .tooltiptext {
+            visibility: hidden;
+            width: 220px;
+            background: #333;
+            color: #fff;
+            text-align: left;
+            border-radius: 6px;
+            padding: 8px 12px;
+            position: absolute;
+            z-index: 1;
+            bottom: 125%;
+            left: 50%;
+            margin-left: -110px;
+            opacity: 0;
+            transition: opacity 0.3s;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
+        .tooltip:hover .tooltiptext {
+            visibility: visible;
+            opacity: 1;
+        }
+
+        .btn-group {
+            display: flex;
+            justify-content: center;
+            gap: 18px;
+            margin-bottom: 18px;
+        }
+
+        .btn {
+            background: #4a90e2;
+            color: #fff;
+            border: none;
+            border-radius: 6px;
+            padding: 10px 28px;
+            font-size: 16px;
+            font-family: 'LXGW WenKai', 'Segoe UI', 'Arial', sans-serif;
+            cursor: pointer;
+            box-shadow: 0 2px 8px rgba(74, 144, 226, 0.08);
+            transition: background 0.2s;
+        }
+
+        .btn:hover {
+            background: #357abd;
+        }
+
+        .result-table th {
+            background: #f0f2f5;
+            color: #2d3a4b;
+            font-weight: 600;
+            text-align: center;
+        }
+
+        .result-table td {
+            text-align: center;
+            font-size: 15px;
+        }
+
+        .red {
+            color: #e74c3c;
+        }
+
+        @media (max-width: 1000px) {
+            .container {
+                min-width: 98vw;
+                padding: 10px;
+            }
+
+            .input-table td.label,
+            .input-table td.input {
+                font-size: 13px;
+            }
+
+            .result-table th,
+            .result-table td {
+                font-size: 13px;
+            }
+        }
+
+        @media print {
+            body {
+                background: #fff !important;
+                margin: 0 !important;
+                padding: 0 !important;
+            }
+
+            .container {
+                box-shadow: none !important;
+                border-radius: 0 !important;
+                margin: 0 !important;
+                min-width: 0 !important;
+                width: 100vw !important;
+                max-width: 100vw !important;
+                padding: 0 !important;
+            }
+
+            .btn-group,
+            .tooltip {
+                display: none !important;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div id="template-buttons" style="display:none; position:fixed; right:20px; top:100px; z-index:1000;">
+        <style>
+            #template-buttons {
+                display: flex;
+                flex-direction: column;
+                background: #fff;
+                box-shadow: 0 4px 16px rgba(74, 144, 226, 0.10);
+                border-radius: 14px;
+                padding: 10px 0 10px 0;
+                align-items: center;
+                min-width: 200px;
+                border: 1px solid #e0e6ed;
+                max-height: 800px;
+                overflow: hidden;
+            }
+
+            #template-buttons .template-btn-list {
+                display: flex;
+                flex-direction: column;
+                gap: 0;
+                width: 100%;
+                overflow-y: auto;
+                max-height: 700px;
+                padding: 0 0.5em;
+            }
+
+            #template-buttons button {
+                background: #4a90e2;
+                color: #fff;
+                border: none;
+                border-radius: 8px;
+                padding: 10px 0;
+                font-size: 16px;
+                font-weight: 500;
+                font-family: 'LXGW WenKai', 'Segoe UI', 'Arial', sans-serif;
+                cursor: pointer;
+                box-shadow: 0 1px 4px rgba(74, 144, 226, 0.08);
+                transition: background 0.18s, box-shadow 0.18s, transform 0.12s;
+                margin: 10px auto;
+                width: 80%;
+                letter-spacing: 1px;
+                text-align: center;
+                display: block;
+            }
+
+            #template-buttons button:hover {
+                background: #357abd;
+                box-shadow: 0 2px 8px rgba(74, 144, 226, 0.16);
+                transform: translateY(-1px) scale(1.03);
+            }
+
+            @media print {
+                #template-buttons {
+                    display: none !important;
+                }
+            }
+        </style>
+        <div class="template-btn-list">
+            <button onclick="applyTemplate(510050)">上证50ETF-2</button>
+            <button onclick="applyTemplate(510300)">沪深300ETF</button>
+            <button onclick="applyTemplate(510500)">中证500ETF-2</button>
+            <button onclick="applyTemplate(159915)">创业板ETF</button>
+            <button onclick="applyTemplate(159920)">恒生ETF-1</button>
+            <button onclick="applyTemplate(513050)">中概互联网ETF-2</button>
+            <button onclick="applyTemplate(5120001)">券商ETF-1</button>
+            <button onclick="applyTemplate(5120002)">券商ETF-2</button>
+            <button onclick="applyTemplate(159938)">医药卫生ETF</button>
+            <button onclick="applyTemplate(512980)">传媒ETF</button>
+            <button onclick="applyTemplate(513630)">港股红利指数ETF</button>
+            <button onclick="applyTemplate(518880)">黄金ETF</button>
+            <button onclick="applyTemplate(159928)">消费ETF</button>
+            <button onclick="applyTemplate(515030)">新能源ETF</button>
+            <button onclick="applyTemplate(159865)">养殖ETF</button>
+            <button onclick="applyTemplate(512660)">军工ETF</button>
+            <!-- 更多按钮 -->
+        </div>
+    </div>
+    <div class="container">
+        <h2><span id="etf-name"></span>网格交易计算器</h2>
+        <form id="gridForm" onsubmit="event.preventDefault();calculate();">
+            <table class="input-table">
+                <tr>
+                    <td class="label">网格上限</td>
+                    <td class="input">
+                        <input type="number" id="upper" value="1.5" step="0.001">
+                        <span class="input-unit"></span>
+                    </td>
+                    <td class="label">网格步长</td>
+                    <td class="input">
+                        <input type="number" id="step" value="1.5" step="0.01">
+                        <span class="input-unit">%</span>
+                    </td>
+                    <td class="label">单笔买入
+                        <span class="tooltip">
+                            <i class="fa fa-question-circle"></i>
+                            <span class="tooltiptext">此处为买入份数，请填写100的整数倍。</span>
+                        </span>
+                    </td>
+                    <td class="input">
+                        <input type="number" id="buy" value="100" step="100">
+                        <span class="input-unit">份</span>
+                    </td>
+                </tr>
+                <tr>
+                    <td class="label">网格下限</td>
+                    <td class="input">
+                        <input type="number" id="lower" value="0.965" step="0.001">
+                        <span class="input-unit"></span>
+                    </td>
+                    <td class="label">损点幅度</td>
+                    <td class="input">
+                        <input type="number" id="loss" value="0.3" step="0.01">
+                        <span class="input-unit">%</span>
+                    </td>
+                    <td class="label">当前价</td>
+                    <td class="input">
+                        <input type="number" id="current" value="1.251" step="0.001">
+                        <span class="input-unit" id="show-template-btn"
+                            style="width:30px;height:30px;display:inline-block;opacity:0;cursor:default;"></span>
+                    </td>
+                </tr>
+                <tr>
+                    <td class="label" colspan="2">当前价应买入网格数量为</td>
+                    <td class="input" colspan="1">
+                        <input type="number" id="position_result" readonly>
+                        <span class="input-unit">份</span>
+                    </td>
+                    <td class="label" colspan="2">本网格的极限投入金额为（压力测试金额）</td>
+                    <td class="input" colspan="1">
+                        <input type="number" id="max_fund_result" readonly>
+                        <span class="input-unit">元</span>
+                    </td>
+                </tr>
+            </table>
+            <div class="btn-group">
+                <button type="button" class="btn" onclick="calculate()">计算</button>
+                <button type="button" class="btn" onclick="window.print()">打印/导出PDF</button>
+                <button type="button" class="btn" onclick="downloadScreenshot()">截图下载</button>
+            </div>
+        </form>
+        <div
+            style="text-align: center; position: relative; display: flex; justify-content: center; margin-bottom: 18px;">
+            <span style="display: inline-block; position: relative;">
+                <span style="font-size: 1.5em; font-weight: bold; color: #2d3a4b;">网格交易明细</span>
+                <span class="tooltip"
+                    style="position: absolute; top: -3px; right: -22px; cursor: pointer; color: #e74c3c; font-size: 18px;">
+                    <i class="fa fa-exclamation-circle"></i>
+                    <span class="tooltiptext"
+                        style="right: 0; left: auto; min-width: 220px;">本网格最大只支持100网，超过将不受控制！</span>
+                </span>
+            </span>
+        </div>
+        <table class="result-table" id="resultTable">
+            <thead>
+                <tr>
+                    <th>格子数</th>
+                    <th>网格触发价</th>
+                    <th>持仓数量（份）</th>
+                    <th>所需资金（元）</th>
+                </tr>
+            </thead>
+            <tbody>
+                <!-- 结果将插入这里 -->
+            </tbody>
+        </table>
+    </div>
+    <script>
+        function applyTemplate(templateId) {
+            if (templateId === 510050) { // 上证50ETF-2
+                document.getElementById('etf-name').textContent = '【上证50ETF-2（510050）】';
+                document.getElementById('upper').value = 3.019;
+                document.getElementById('lower').value = 2.573;
+                document.getElementById('step').value = 1.5;
+                document.getElementById('loss').value = 0.4;
+                document.getElementById('buy').value = 100;
+                document.getElementById('current').value = 2.749;
+            } else if (templateId === 510300) { // 沪深300ETF
+                document.getElementById('etf-name').textContent = '【沪深300ETF（510300）】';
+                document.getElementById('upper').value = 4.266;
+                document.getElementById('lower').value = 3.611;
+                document.getElementById('step').value = 1.0;
+                document.getElementById('loss').value = 0.0;
+                document.getElementById('buy').value = 100;
+                document.getElementById('current').value = 3.959;
+            } else if (templateId === 510500) { // 中证500ETF-2
+                document.getElementById('etf-name').textContent = '【中证500ETF（510500）】';
+                document.getElementById('upper').value = 6.600;
+                document.getElementById('lower').value = 4.400;
+                document.getElementById('step').value = 2.0;
+                document.getElementById('loss').value = 0.1;
+                document.getElementById('buy').value = 100;
+                document.getElementById('current').value = 5.749;
+            } else if (templateId === 159915) { // 创业板ETF
+                document.getElementById('etf-name').textContent = '【创业板ETF（159915）】';
+                document.getElementById('upper').value = 2.442;
+                document.getElementById('lower').value = 1.678;
+                document.getElementById('step').value = 3.0;
+                document.getElementById('loss').value = 0.3;
+                document.getElementById('buy').value = 100;
+                document.getElementById('current').value = 2.000;
+            } else if (templateId === 159920) { // 恒生ETF-1
+                document.getElementById('etf-name').textContent = '【恒生ETF-1（159920）】';
+                document.getElementById('upper').value = 1.600;
+                document.getElementById('lower').value = 1.250;
+                document.getElementById('step').value = 1.3;
+                document.getElementById('loss').value = 0.3;
+                document.getElementById('buy').value = 500;
+                document.getElementById('current').value = 1.423;
+            } else if (templateId === 513050) { // 中概互联网ETF-2
+                document.getElementById('etf-name').textContent = '【中概互联网ETF-2（513050）】';
+                document.getElementById('upper').value = 1.630;
+                document.getElementById('lower').value = 1.000;
+                document.getElementById('step').value = 4.4;
+                document.getElementById('loss').value = 0.0;
+                document.getElementById('buy').value = 400;
+                document.getElementById('current').value = 1.354;
+            } else if (templateId === 5120001) { // 券商ETF-1
+                document.getElementById('etf-name').textContent = '【券商ETF-1（512000）】';
+                document.getElementById('upper').value = 1.335;
+                document.getElementById('lower').value = 1.080;
+                document.getElementById('step').value = 1.4;
+                document.getElementById('loss').value = 0.5;
+                document.getElementById('buy').value = 1000;
+                document.getElementById('current').value = 0.997;
+            } else if (templateId === 5120002) { // 券商ETF-2
+                document.getElementById('etf-name').textContent = '【券商ETF-2（512000）】';
+                document.getElementById('upper').value = 1.175;
+                document.getElementById('lower').value = 0.880;
+                document.getElementById('step').value = 2;
+                document.getElementById('loss').value = 0.5;
+                document.getElementById('buy').value = 1000;
+                document.getElementById('current').value = 0.997;
+            } else if (templateId === 159938) { // 医药卫生ETF
+                document.getElementById('etf-name').textContent = '【医药卫生ETF（159938）】';
+                document.getElementById('upper').value = 0.701;
+                document.getElementById('lower').value = 0.561;
+                document.getElementById('step').value = 2;
+                document.getElementById('loss').value = 0.5;
+                document.getElementById('buy').value = 500;
+                document.getElementById('current').value = 0.651;
+            } else if (templateId === 512980) { // 传媒ETF
+                document.getElementById('etf-name').textContent = '【传媒ETF（512980）】';
+                document.getElementById('upper').value = 0.865;
+                document.getElementById('lower').value = 0.625;
+                document.getElementById('step').value = 2;
+                document.getElementById('loss').value = 0.5;
+                document.getElementById('buy').value = 300;
+                document.getElementById('current').value = 0.799;
+            } else if (templateId === 513630) { // 港股红利指数ETF
+                document.getElementById('etf-name').textContent = '【港股红利指数ETF（513630）】';
+                document.getElementById('upper').value = 1.500;
+                document.getElementById('lower').value = 0.945;
+                document.getElementById('step').value = 1.51;
+                document.getElementById('loss').value = 0.3;
+                document.getElementById('buy').value = 300;
+                document.getElementById('current').value = 1.386;
+            } else if (templateId === 518880) { // 黄金ETF
+                document.getElementById('etf-name').textContent = '【黄金ETF（518880）】';
+                document.getElementById('upper').value = 8.033;
+                document.getElementById('lower').value = 6.317;
+                document.getElementById('step').value = 3.00;
+                document.getElementById('loss').value = 0.1;
+                document.getElementById('buy').value = 100;
+                document.getElementById('current').value = 7.369;
+            } else if (templateId === 159928) { // 消费ETF
+                document.getElementById('etf-name').textContent = '【消费ETF（159928）】';
+                document.getElementById('upper').value = 0.955;
+                document.getElementById('lower').value = 0.725;
+                document.getElementById('step').value = 2.0;
+                document.getElementById('loss').value = 0.5;
+                document.getElementById('buy').value = 300;
+                document.getElementById('current').value = 0.824;
+            } else if (templateId === 515030) { // 新能源ETF
+                document.getElementById('etf-name').textContent = '【新能源ETF（515030）】';
+                document.getElementById('upper').value = 1.411;
+                document.getElementById('lower').value = 0.984;
+                document.getElementById('step').value = 3.0;
+                document.getElementById('loss').value = 0.4;
+                document.getElementById('buy').value = 300;
+                document.getElementById('current').value = 1.214;
+            } else if (templateId === 159865) { // 养殖ETF
+                document.getElementById('etf-name').textContent = '【养殖ETF（159865）】';
+                document.getElementById('upper').value = 0.654;
+                document.getElementById('lower').value = 0.516;
+                document.getElementById('step').value = 1.5;
+                document.getElementById('loss').value = 0.5;
+                document.getElementById('buy').value = 500;
+                document.getElementById('current').value = 0.609;
+            } else if (templateId === 512660) { // 军工ETF
+                document.getElementById('etf-name').textContent = '【军工ETF（512660）】';
+                document.getElementById('upper').value = 1.219;
+                document.getElementById('lower').value = 0.918;
+                document.getElementById('step').value = 3.0;
+                document.getElementById('loss').value = 0.5;
+                document.getElementById('buy').value = 300;
+                document.getElementById('current').value = 1.047;
+            }
+            calculate();
+        }
+
+        function calculate() {
+            // 获取参数前，先校验所有输入不能为负数
+            ['upper', 'lower', 'step', 'loss', 'buy', 'current'].forEach(function (id) {
+                var input = document.getElementById(id);
+                if (input && parseFloat(input.value) < 0) {
+                    input.value = 0;
+                }
+            });
+            // 获取参数
+            const upper = parseFloat(document.getElementById('upper').value); // 网格上限
+            const lower = parseFloat(document.getElementById('lower').value); // 网格下限
+            const step = parseFloat(document.getElementById('step').value) / 100; // 网格步长，百分比转小数
+            const loss = parseFloat(document.getElementById('loss').value) / 100; // 损点幅度，百分比转小数
+            const grid_step = step - loss; // 网格步长
+            const buy = parseInt(document.getElementById('buy').value); // 单笔买入份数
+            const current = parseFloat(document.getElementById('current').value); // 当前价
+            // 计算格子数
+            let gridCount = 0;
+            let price = upper;
+            while (price >= lower && gridCount <= 100) {
+                price *= (1 - grid_step);
+                gridCount++;
+            }
+            gridCount = gridCount - 1;
+            // 计算表格
+            let tbody = '';
+            price = upper; // 网格触发价
+            let position = 0; // 持仓数量
+            let fund_acc = 0; // 所需资金
+            let positionAtCurrent = 0; // 当前价应买入网格仓数量
+            let foundCurrent = false; // 是否找到当前价
+            for (let i = 0; i <= gridCount; i++) {
+                if (i > 0) position += buy;
+                if (i === 0) {
+                    fund_acc = 0;
+                } else {
+                    fund_acc = fund_acc + buy * price;
+                }
+                // 记录当前价应买入网格仓数量
+                if (!foundCurrent && current <= upper && price < current) {
+                    positionAtCurrent = position - buy;
+                    foundCurrent = true;
+                }
+                tbody += `<tr>
+                <td>${i}</td>
+                <td class="red">${price.toFixed(3)}</td>
+                <td>${position}</td>
+                <td class="red">${fund_acc.toFixed(2)}</td>
+                </tr>`;
+                price *= (1 - grid_step);
+            }
+            document.querySelector('#resultTable tbody').innerHTML = tbody;
+            // 极限投入金额为最后一格的fund_acc
+            document.getElementById('max_fund_result').value = fund_acc.toFixed(2);
+            // 当前价应买入网格仓数量
+            if (positionAtCurrent === 0 && current <= (price / (1 - grid_step))) {
+                positionAtCurrent = position;
+            }
+            document.getElementById('position_result').value = positionAtCurrent;
+        }
+
+        function downloadScreenshot() {
+            const container = document.querySelector('.container');
+            html2canvas(container, {
+                onclone: function (clonedDoc) {
+                    const container = clonedDoc.querySelector('.container');
+                    if (container) {
+                        container.style.background = '#fff'; // 强制白底
+                        container.style.boxShadow = 'none'; // 去除阴影
+                        container.style.borderRadius = '0'; // 去除圆角
+                    }
+                    // 隐藏按钮组和所有tooltip
+                    const btnGroup = clonedDoc.querySelector('.btn-group');
+                    if (btnGroup) btnGroup.style.display = 'none';
+                    clonedDoc.querySelectorAll('.tooltip').forEach(el => el.style.display = 'none');
+                    // 替换input为span
+                    const clonedInputs = clonedDoc.querySelectorAll('.container input[type=\"number\"]');
+                    clonedInputs.forEach(input => {
+                        const span = clonedDoc.createElement('span');
+                        span.className = 'input-value-snapshot';
+                        span.style.display = 'inline-block';
+                        span.style.minWidth = input.offsetWidth + 'px';
+                        span.style.height = input.offsetHeight + 'px';
+                        span.style.lineHeight = input.offsetHeight + 'px';
+                        span.style.fontSize = window.getComputedStyle(input).fontSize;
+                        span.style.textAlign = 'right';
+                        span.style.background = 'transparent';
+                        span.textContent = input.value;
+                        input.parentNode.insertBefore(span, input);
+                        input.parentNode.removeChild(input);
+                    });
+                }
+            }).then(canvas => {
+                const link = document.createElement('a');
+                link.download = '网格交易计算器截图.png';
+                link.href = canvas.toDataURL('image/png');
+                link.click();
+            });
+        }
+
+        document.getElementById('show-template-btn').ondblclick = function () {
+            const tpl = document.getElementById('template-buttons');
+            if (tpl.style.display === 'block') {
+                tpl.style.display = 'none';
+            } else {
+                tpl.style.display = 'block';
+            }
+        };
+
+        window.onload = calculate;
+    </script>
+</body>
+
+</html>
