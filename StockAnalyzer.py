@@ -170,7 +170,11 @@ class StockAnalyzer:
             1, 0)
 
         df['白线下20买'] = np.where(
-            (df['短期'] <= 20) & (df['长期'] >= 60),
+            (df['短期'] <= 25) & (df['长期'] >= 55),
+            1, 0)
+
+        df['白线下20买_小V'] = np.where(
+            (df['长期'] - df['短期'] >= 40) & (df['长期'] >= 60),
             1, 0)
 
         # 白穿红线买（金叉）
@@ -401,19 +405,21 @@ class StockAnalyzer:
         print(f"数据已保存至：{filename}")
     
 class StockMonitor:
-    def __init__(self, ticker, file_path, start_date=None, end_date=None):
+    def __init__(self, ticker, file_path, start_date=None, end_date=None, lookback_period=5, min_signal_count=3):
         self.ticker = ticker
         self.file_path = file_path
         self.start_date = start_date
         self.end_date = end_date
+        self.lookback_period = lookback_period
+        self.min_signal_count = min_signal_count
     
     def fastdown_J(self):
         analyzer = StockAnalyzer(self.ticker, self.file_path)
         data_kdj = analyzer.calculate_kdj()
         label = False
-        if (data_kdj['J'].iloc[-1] < 10 and data_kdj['J'].iloc[-3] > 70) or (data_kdj['J'].iloc[-1] < 5 and data_kdj['J'].iloc[-3] > 65) or (data_kdj['J'].iloc[-1] < 0 and data_kdj['J'].iloc[-3] > 60):
+        if (data_kdj['J'].iloc[-3] - data_kdj['J'].iloc[-1]) >= 50:
             label = True
-        
+        '''
         label = all(
         any([
             (data_kdj['J'].iloc[-1] < 10 and data_kdj['J'].iloc[period] > 70),  
@@ -421,7 +427,8 @@ class StockMonitor:
             (data_kdj['J'].iloc[-1] < 0 and data_kdj['J'].iloc[period] > 60) 
         ])
         for period in [-1, -2, -3] )
-        print(f"{self.ticker}J值是否快速下降：{'true✅' if label else 'false❌'}，最近3️⃣天的J值：{round(data_kdj['J'].iloc[-3],1)}，{round(data_kdj['J'].iloc[-2],1)}，{round(data_kdj['J'].iloc[-1],1)}")
+        '''
+        print(f"{self.ticker}:J值是否快速下降：{'true✅' if label else 'false❌'}，最近3️⃣天的J值：{round(data_kdj['J'].iloc[-3],1)}，{round(data_kdj['J'].iloc[-2],1)}，{round(data_kdj['J'].iloc[-1],1)}")
 
         return label
 
@@ -434,12 +441,31 @@ class StockMonitor:
             data_shakeout.iloc[period].get("四线归零买", False) == 1,
             data_shakeout.iloc[period].get("白线下20买", False) == 1,
             data_shakeout.iloc[period].get("白穿红线买", False) == 1,
-            data_shakeout.iloc[period].get("白穿黄线买", False) == 1
+            data_shakeout.iloc[period].get("白穿黄线买", False) == 1,
+            data_shakeout.iloc[period].get("白线下20买_小V", False) == 1
         ])
-        for period in [-1, -2, -3] )
-        print(f"{self.ticker}洗盘指标：{data_shakeout.iloc[-3][-4:], data_shakeout.iloc[-2][-4:], data_shakeout.iloc[-1][-4:]}")
+        for period in [-1, -2] )
+        print(f"{self.ticker}:近两天{self.ticker}洗盘指标：{data_shakeout.iloc[-2][-5:], data_shakeout.iloc[-1][-5:]}")
 
         return label
+
+    # 检查最近5个周期内是否至少有3个周期满足任意买入信号
+    def check_signal_frequency(self):
+        analyzer = StockAnalyzer(self.ticker, self.file_path)
+        data_shakeout = analyzer.calculate_shakeout()
+        signal_count = 0
+        for period in range(-1, -self.lookback_period-1, -1):  # 检查最近5个周期
+            if any([
+                data_shakeout.iloc[period].get("四线归零买", 0) == 1,
+                data_shakeout.iloc[period].get("白线下20买", 0) == 1,
+                data_shakeout.iloc[period].get("白穿红线买", 0) == 1,
+                data_shakeout.iloc[period].get("白穿黄线买", 0) == 1,
+                data_shakeout.iloc[period].get("白线下20买_小V", 0) == 1
+            ]):
+                signal_count += 1
+                if signal_count >= self.min_signal_count:  # 达到最小信号数就提前返回
+                    return True
+        return signal_count >= self.min_signal_count
 
 # 示例调用
 if __name__ == "__main__":

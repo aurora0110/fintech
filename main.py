@@ -168,7 +168,7 @@ if __name__ == '__main__':
         with open(backtest_log_path_new, 'a') as f:
             f.write(f'*************当前回测策略为：可投入金额为{amount}元，最小操作间隔为{ineterval_days}天，计划操作手数为{total_shares}手*************')    
         print(f"⏰今日：{data.iloc[-1]['日期']}，{symbol}，收盘价为：{data.iloc[-1]['收盘']}，最高价为：{data.iloc[-1]['最高']}，最低价为：{data.iloc[-1]['最低']}，J值为：{round(data_kdj['J'].iloc[-1],3)}，MACD值为：{round(data_macd['DIF'].iloc[-1],3)}，单针下20短期指标为：{round(data_shakeout['短期'].iloc[-1],3)}，单针下20长期指标为：{round(data_shakeout['长期'].iloc[-1],3)}")
-        print(f"💹技术指标：J值小于{J_threshold}：{'true✅' if J_boolean else 'false❌'}，MACD指标：DIF水上：{'true✅' if MACD_boolean else 'false❌'}，单针下20短期指标小于20且单针下20长期指标大于60：{'true✅' if SHAKEOUT_boolean else 'false❌'}，最近连续{bbi_days}天的收盘价格大于bbi：{'true✅' if BBI_boolean else 'false❌'}")
+        print(f"💹技术指标：J值小于{J_threshold}：{'true✅' if J_boolean else 'false❌'}，MACD指标：DIF水上：{'true✅' if MACD_boolean else 'false❌'}，单针下20短期指标小于20且长期指标大于60：{'true✅' if SHAKEOUT_boolean else 'false❌'}，最近连续{bbi_days}天的收盘价格大于bbi：{'true✅' if BBI_boolean else 'false❌'}")
         print("🐤" * 90)
 
     # 回测策略年化收益大于5%
@@ -181,6 +181,8 @@ if __name__ == '__main__':
     stock_select_list_JM = []
     stock_select_list_S = [] 
     stock_fast_down_j_list = []
+    stock_2days_shakeout_list = []
+    stock_5days_shakeout_list = []
 
     # 计算stock
     for symbol in stock_symbol_list:
@@ -222,10 +224,6 @@ if __name__ == '__main__':
         # 画图
         if figSwitch:
             analyzer.plot_all(data_ma, data_bbi, data_price, data_macd, data_kdj, data_shakeout, symbol, windows=[20, 30, 60, 120])
-
-        fast_down_j_label = data_kdj.get('fast_down_j_label')
-        if fast_down_j_label:
-            stock_fast_down_j_list.append(symbol)
 
         # 计算回测收益，策略：每到j值满足条件就买入或者卖出
         data_input = []
@@ -274,11 +272,19 @@ if __name__ == '__main__':
         
         Jmonitor = StockMonitor(symbol, file_path).fastdown_J()
         ShakeOut_Monitor = StockMonitor(symbol, file_path).continuous_shakeout()
+        Frequency_Monitor = StockMonitor(symbol, file_path).check_signal_frequency()
+
+        if Jmonitor:
+            stock_fast_down_j_list.append(symbol)
+        if ShakeOut_Monitor:
+            stock_2days_shakeout_list.append(symbol)
+        if Frequency_Monitor:
+            stock_5days_shakeout_list.append(symbol)
 
         with open(backtest_log_path_new, 'a') as f:
             f.write(f'*************当前回测策略为：可投入金额为{amount}元，最小操作间隔为{ineterval_days}天，计划操作手数为{total_shares}手*************')    
         print(f"⏰今日：{data.iloc[-1]['日期']}，{symbol}，收盘价为：{data.iloc[-1]['收盘']}，最高价为：{data.iloc[-1]['最高']}，最低价为：{data.iloc[-1]['最低']}，J值为：{round(data_kdj['J'].iloc[-1],3)}，MACD值为：{round(data_macd['DIF'].iloc[-1],3)}，单针下20短期指标为：{round(data_shakeout['短期'].iloc[-1],3)}，单针下20长期指标为：{round(data_shakeout['长期'].iloc[-1],3)}")
-        print(f"💹技术指标：J值小于{J_threshold}：{'true✅' if J_boolean else 'false❌'}，MACD指标：DIF水上：{'true✅' if MACD_boolean else 'false❌'}，单针下20短期指标小于20且单针下20长期指标大于60：{'true✅' if SHAKEOUT_boolean else 'false❌'}，最近连续{bbi_days}天的收盘价格大于bbi：{'true✅' if BBI_boolean else 'false❌'}，3天内J快速下降：{'true✅' if fast_down_j_label else 'false❌'}，J值快速下降监控：{'true✅' if Jmonitor else 'false❌'}，连续洗盘信号：{'true✅' if ShakeOut_Monitor else 'false❌'}")
+        print(f"💹技术指标：J值小于{J_threshold}：{'true✅' if J_boolean else 'false❌'}，MACD指标：DIF水上：{'true✅' if MACD_boolean else 'false❌'}，单针下20短期指标小于20且长期指标大于60：{'true✅' if SHAKEOUT_boolean else 'false❌'}，最近连续{bbi_days}天的收盘价格大于bbi：{'true✅' if BBI_boolean else 'false❌'}，J值快速下降监控：{'true✅' if Jmonitor else 'false❌'}，连续洗盘信号：{'true✅' if ShakeOut_Monitor else 'false❌'}，最近5天出现3次洗盘信号：{'true✅' if Frequency_Monitor else 'false❌'}")
         print("🐤" * 95)
 
     print("💗" * 40, "ETF 今日数据如下", "💗" * 40)
@@ -287,13 +293,14 @@ if __name__ == '__main__':
     #print(f"ETF回测策略年化收益小于1️⃣0️⃣%有{len(ordinary_list)}个：{ordinary_list}，分别为：{ordinary_list}")
     print(f"✅ETF当日满足J值小于{J_threshold}的ETF有{len(select_list_J)}个：{select_list_J}，❗️持有且大于9️⃣0️⃣的有{len(select_list_J_sell)}个：{select_list_J_sell}")
     print(f"ETF当日满足J值小于{J_threshold}的ETF,且MACD水上💦的有{len(select_list_JM)}个：{select_list_JM}")
-    print(f"✅ETF当日满足J值小于{J_threshold}，单针下20短期指标小于20且单针下20长期指标大于60的ETF有{len(select_list_JS)}个：{select_list_JS}")
-    print(f"ETF当日满足J值小于{J_threshold}，单针下20短期指标小于20且单针下20长期指标大于60，最近连续{bbi_days}天的收盘价格大于bbi的ETF有{len(select_list_JSBBI)}个：{select_list_JSBBI}")
+    print(f"✅ETF当日满足J值小于{J_threshold}，单针下20短期指标小于20且长期指标大于60的ETF有{len(select_list_JS)}个：{select_list_JS}")
+    print(f"ETF当日满足J值小于{J_threshold}，单针下20短期指标小于20且长期指标大于60，最近连续{bbi_days}天的收盘价格大于bbi的ETF有{len(select_list_JSBBI)}个：{select_list_JSBBI}")
     print("💗" * 40, "STOCK 今日数据如下", "💗" * 40)
     #print(f"STOCK当前回测策略为：可投入金额💰为{amount}元，最小操作间隔为{ineterval_days}天，计划操作手数为{total_shares}手")
     #print(f"✅STOCK回测策略年化收益大于1️⃣0️⃣%有{len(stock_well_list)}个：{stock_well_list}，分别为：{stock_well_list}")
     #print(f"STOCK回测策略年化收益小于1️⃣0️⃣%有{len(stock_ordinary_list)}个：{stock_ordinary_list}，分别为：{stock_ordinary_list}")   
-    print(f"✅STOCK当日满足J值小于{J_threshold}的有{len(stock_select_list_J)}个：{stock_select_list_J}，❗️持有且大于9️⃣0️⃣的有{len(stock_select_list_J_sell)}个：{stock_select_list_J_sell}，⬇️单针下20信号的有{len(stock_select_list_S)}个:{stock_select_list_S}，J值快速下降的有{len(stock_fast_down_j_list)}个：{stock_fast_down_j_list}")
+    print(f"✅STOCK当日满足J值小于{J_threshold}的有{len(stock_select_list_J)}个：{stock_select_list_J}，❗️持有且大于9️⃣0️⃣的有{len(stock_select_list_J_sell)}个：{stock_select_list_J_sell}，⬇️单针下20信号的有{len(stock_select_list_S)}个:{stock_select_list_S}，J值快速下降的有{len(stock_fast_down_j_list)}个：{stock_fast_down_j_list}",)
     print(f"STOCK当日满足J值小于{J_threshold}的,且MACD水上💦的有{len(stock_select_list_JM)}个：{stock_select_list_JM}")
-    print(f"✅STOCK当日满足J值小于{J_threshold}，单针下20短期指标小于20且单针下20长期指标大于60的有{len(stock_select_list_JS)}个：{stock_select_list_JS}")
-    print(f"STOCK当日满足J值小于{J_threshold}，单针下20短期指标小于20且单针下20长期指标大于60，最近连续{bbi_days}天的收盘价格大于bbi的有{len(stock_select_list_JSBBI)}个：{stock_select_list_JSBBI}")
+    print(f"✅STOCK当日满足J值小于{J_threshold}，单针下20短期指标小于20且长期指标大于60的有{len(stock_select_list_JS)}个：{stock_select_list_JS}")
+    print(f"STOCK当日满足J值小于{J_threshold}，单针下20短期指标小于20且长期指标大于60，最近连续{bbi_days}天的收盘价格大于bbi的有{len(stock_select_list_JSBBI)}个：{stock_select_list_JSBBI}")
+    print(f"STOCK满足J值快速下降的有{len(stock_fast_down_j_list)}个：{stock_fast_down_j_list}，满足连续出现洗盘信号的有{len(stock_2days_shakeout_list)}：{stock_2days_shakeout_list}，满足5天出现3次洗盘信号的有{len(stock_5days_shakeout_list)}：{stock_5days_shakeout_list}")

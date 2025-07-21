@@ -19,12 +19,12 @@ def download_stock_data(symbol, start_date, end_date, adjust='qfq'):
     :return: 股票数据
     """
     try:
-        if type == "stock":
-            stock_data = ak.stock_zh_a_hist(symbol, "daily", start_date, end_date, "qfq") # symbol=symbol, period="daily", start_date=start_date, end_date=end_date, adjust="qfq"
-            # stock_data = ak.stock_zh_a_hist_tx(symbol = "sz000001", start_date = "19980101", end_date = "20500101", adjust = "",timeout = None)
-            #stock_data = ak.stock_zh_a_hist(symbol= "000001",period= "daily",start_date= "19980101",end_date= "20500101",adjust= "",timeout = None)
-            print('stock_data:', stock_data)
-            return stock_data
+        
+        stock_data = ak.stock_zh_a_hist(symbol, "daily", start_date, end_date, "qfq") # symbol=symbol, period="daily", start_date=start_date, end_date=end_date, adjust="qfq"
+        #stock_data = ak.stock_zh_a_hist_tx(symbol = "sz000001", start_date = "19980101", end_date = "20500101", adjust = "",timeout = None)
+        #stock_data = ak.stock_zh_a_hist(symbol= "000001",period= "daily",start_date= "19980101",end_date= "20500101",adjust= "",timeout = None)
+        print('stock_data:', stock_data)
+        return stock_data
     except Exception as e:
         print(f"获取数据失败: {str(e)}")
         return None
@@ -148,15 +148,6 @@ def batch_download_etf_data(symbol_list, days, start_date, end_date, year_interv
                 if history_etf_data is not None:
                     # 获取所有时间段etf数据
                     all_data[symbol] = history_etf_data
-
-            else:
-                if history_etf_data is not None:
-                    # 获取最近N天数据
-                    history_data = history_data.tail(days)
-                    all_data[symbol] = history_data
-                else:
-                    history_data = history_data.tail(days)
-                    all_data[symbol] = history_data
         else:
             print(f"批量获取fund：{symbol}历史数据失败")
     return all_data
