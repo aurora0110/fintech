@@ -39,6 +39,7 @@ if __name__ == '__main__':
     bbi_days = config.bbi_days
     J_threshold = config.J_threshold
     holding_stock_codes = holdingConfig.stock_codes
+    volatility = config.volatilitySwitch
 
     if not os.path.exists(backtest_log_path):
         os.makedirs(backtest_log_path)
@@ -200,19 +201,20 @@ if __name__ == '__main__':
         # 读取数据
         data = getData.read_from_csv(file_path)
 
-        # 计算极值 1 2 3 4 5
-        extremaPoints = cep.one_years_extrema_points(file_path)
-        # 计算平均值 1 2 3 4 5
-        extremaPoints = cap.x_years_avg_points(file_path,3)
-
         # 计算rsv
         data_rsv = calRSV.calrsv(data, 9)
 
         # 计算时间窗口内的价格波动幅度
-        day_window = 100
-        range = ctr.cal_range(data, day_window)
-        ctr.cal_volatility(data, day_window)
-        atr = ctr.cal_ATR(data, day_window)
+        if volatility:
+            day_window = 100
+            range = ctr.cal_range(data, day_window)
+            ctr.cal_volatility(data, day_window)
+            atr = ctr.cal_ATR(data, day_window)
+            # 计算极值 1 2 3 4 5
+            extremaPoints = cep.one_years_extrema_points(file_path)
+            # 计算平均值 1 2 3 4 5
+            extremaPoints = cap.x_years_avg_points(file_path,3)
+
 
         analyzer = StockAnalyzer(symbol, file_path)
         data_ma = analyzer.calculate_moving_averages()

@@ -445,7 +445,6 @@ class StockMonitor:
             data_shakeout.iloc[period].get("白线下20买_小V", False) == 1
         ])
         for period in [-1, -2] )
-        print(f"{self.ticker}:近两天{self.ticker}洗盘指标：{data_shakeout.iloc[-2][-5:], data_shakeout.iloc[-1][-5:]}")
 
         return label
 
