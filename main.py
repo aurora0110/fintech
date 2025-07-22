@@ -40,6 +40,8 @@ if __name__ == '__main__':
     J_threshold = config.J_threshold
     holding_stock_codes = holdingConfig.stock_codes
     volatility = config.volatilitySwitch
+    categorySwitch = config.categorySwitch
+    category_name = config.category_name
 
     if not os.path.exists(backtest_log_path):
         os.makedirs(backtest_log_path)
@@ -60,6 +62,12 @@ if __name__ == '__main__':
     # 获取当前时间
     now = datetime.now()
     now_date = now.strftime("%Y%m%d")
+
+    # 下载全市场股票目录
+    if categorySwitch:
+        df = getData.download_stock_category()
+        
+        getData.save_2_csv(df, category_name, file_path)
 
     # 下载最新数据并保存成csv文件
     if downloadNewDataSwitch:
@@ -220,6 +228,7 @@ if __name__ == '__main__':
         data_ma = analyzer.calculate_moving_averages()
         data_bbi = analyzer.calculate_bbi()
         data_kdj = analyzer.calculate_kdj()
+        data_rsi = analyzer.calculate_rsi()
         data_macd = analyzer.calculate_macd()
         data_price = analyzer.calculate_price()
         data_shakeout = analyzer.calculate_shakeout()
@@ -256,32 +265,38 @@ if __name__ == '__main__':
         condition = (price_last > bbi_last).sum()
         if condition == bbi_days:
             BBI_boolean = True
+
+        # 读取全市场股票代码和对应名字
+        pd = getData.read_from_csv("/Users/lidongyang/Desktop/MyInvestStrategy/GridStrategy/data/全市场etf目录.csv")
+        # 读取的代码左侧缺0，补0
+        pd["code"] = pd["code"].fillna(0).astype(int).astype(str).str.zfill(6)
+        pd_dict = pd.set_index("code")["name"].to_dict()
         
         if J_boolean:
-            stock_select_list_J.append(symbol)
+            stock_select_list_J.append([symbol, pd_dict[symbol]])
         
         if SHAKEOUT_boolean:
-            stock_select_list_S.append(symbol)
+            stock_select_list_S.append([symbol, pd_dict[symbol]])
 
         if J_boolean and MACD_boolean:
-            stock_select_list_JM.append(symbol)
+            stock_select_list_JM.append([symbol, pd_dict[symbol]])
         
         if J_boolean and SHAKEOUT_boolean and BBI_boolean:
-            stock_select_list_JSBBI.append(symbol)
+            stock_select_list_JSBBI.append([symbol, pd_dict[symbol]])
     
         if J_boolean and SHAKEOUT_boolean:
-            stock_select_list_JS.append(symbol)
+            stock_select_list_JS.append([symbol, pd_dict[symbol]])
         
         Jmonitor = StockMonitor(symbol, file_path).fastdown_J()
         ShakeOut_Monitor = StockMonitor(symbol, file_path).continuous_shakeout()
         Frequency_Monitor = StockMonitor(symbol, file_path).check_signal_frequency()
 
         if Jmonitor:
-            stock_fast_down_j_list.append(symbol)
+            stock_fast_down_j_list.append([symbol, pd_dict[symbol]])
         if ShakeOut_Monitor:
-            stock_2days_shakeout_list.append(symbol)
+            stock_2days_shakeout_list.append([symbol, pd_dict[symbol]])
         if Frequency_Monitor:
-            stock_5days_shakeout_list.append(symbol)
+            stock_5days_shakeout_list.append([symbol, pd_dict[symbol]])
 
         with open(backtest_log_path_new, 'a') as f:
             f.write(f'*************当前回测策略为：可投入金额为{amount}元，最小操作间隔为{ineterval_days}天，计划操作手数为{total_shares}手*************')    
@@ -305,4 +320,4 @@ if __name__ == '__main__':
     print(f"STOCK当日满足J值小于{J_threshold}的,且MACD水上💦的有{len(stock_select_list_JM)}个：{stock_select_list_JM}")
     print(f"✅STOCK当日满足J值小于{J_threshold}，单针下20短期指标小于20且长期指标大于60的有{len(stock_select_list_JS)}个：{stock_select_list_JS}")
     print(f"STOCK当日满足J值小于{J_threshold}，单针下20短期指标小于20且长期指标大于60，最近连续{bbi_days}天的收盘价格大于bbi的有{len(stock_select_list_JSBBI)}个：{stock_select_list_JSBBI}")
-    print(f"STOCK满足J值快速下降的有{len(stock_fast_down_j_list)}个：{stock_fast_down_j_list}，满足连续出现洗盘信号的有{len(stock_2days_shakeout_list)}：{stock_2days_shakeout_list}，满足5天出现3次洗盘信号的有{len(stock_5days_shakeout_list)}：{stock_5days_shakeout_list}")
+    print(f"STOCK满足J值快速下降（3天内下降值>=50）的有{len(stock_fast_down_j_list)}个：{stock_fast_down_j_list}，满足连续2天出现洗盘信号的有{len(stock_2days_shakeout_list)}个：{stock_2days_shakeout_list}，满足10天出现3次洗盘信号的有{len(stock_5days_shakeout_list)}个：{stock_5days_shakeout_list}")

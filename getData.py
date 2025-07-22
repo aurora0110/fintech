@@ -30,9 +30,8 @@ def download_stock_data(symbol, start_date, end_date, adjust='qfq'):
         return None
 
 def download_stock_category():
-    df_a = ak.stock_info_a_code_name().assign(market="A股")
-    df_list = df_a['code'].tolist()
-    return df_list
+    df = ak.stock_info_a_code_name().assign(market="A股")
+    return df
 
 def download_etf_data(symbol):
     """
@@ -181,17 +180,19 @@ def read_from_csv(file_path):
 if __name__ == '__main__':
     
     # 获取etf历史数据使用实例
-    category_name = "全市场etf目录0612"
-    symbol = config.symbol # symbol 调用em东方财富接口不用加前缀，调用sina新浪接口要加上市场前缀 sh sz
     symbol_list = config.stock_symbol_list
     stock_start_date = config.stock_start_date
     end_date = config.end_date
+    category_name = "全市场etf目录" + end_date
+    file_path = config.file_path 
     #istory_etf_data = batch_download_etf_data(symbol_list,days="all")
     #for key, value in history_etf_data.items():
      #   save_2_csv(value, key)
 
     # 获取A股全部股票目录
-    #df = download_stock_category()
+    df = download_stock_category()
+    category_name = "全市场etf目录" + end_date
+    save_2_csv(df, category_name, file_path)
 
 
 

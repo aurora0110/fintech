@@ -105,6 +105,20 @@ class StockAnalyzer:
             'fast_down_j_label': fast_down_j_label
         }
 
+    def calculate_rsi(self):
+        df = self.stock_data.copy()
+        # 使用 datetime 比较
+        df['日期'] = pd.to_datetime(df['日期'])
+        df = df[(df['日期'] >= self.start_date) & (df['日期'] <= self.end_date)]
+
+        delta = df['收盘'].diff(1)
+        gain = (delta.where(delta > 0, 0)).rolling(window=6).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=6).mean()
+        rs = gain / loss
+        rsi = 100 - (100 / (1 + rs))
+        df['RSI'] = rsi
+        return df
+
     def calculate_moving_averages(self):
         windows = self.windows
         result = {}
@@ -405,13 +419,13 @@ class StockAnalyzer:
         print(f"数据已保存至：{filename}")
     
 class StockMonitor:
-    def __init__(self, ticker, file_path, start_date=None, end_date=None, lookback_period=5, min_signal_count=3):
+    def __init__(self, ticker, file_path, start_date=None, end_date=None, lookback_period=10, min_signal_count=3):
         self.ticker = ticker
         self.file_path = file_path
         self.start_date = start_date
         self.end_date = end_date
-        self.lookback_period = lookback_period
-        self.min_signal_count = min_signal_count
+        self.lookback_period = lookback_period # 连续n天内出现单针下20的信号
+        self.min_signal_count = min_signal_count # 出现n次单针下20的信号
     
     def fastdown_J(self):
         analyzer = StockAnalyzer(self.ticker, self.file_path)
@@ -448,12 +462,12 @@ class StockMonitor:
 
         return label
 
-    # 检查最近5个周期内是否至少有3个周期满足任意买入信号
+    # 检查最近10天内是否至少有3个周期满足任意买入信号
     def check_signal_frequency(self):
         analyzer = StockAnalyzer(self.ticker, self.file_path)
         data_shakeout = analyzer.calculate_shakeout()
         signal_count = 0
-        for period in range(-1, -self.lookback_period-1, -1):  # 检查最近5个周期
+        for period in range(-1, -self.lookback_period-1, -1): 
             if any([
                 data_shakeout.iloc[period].get("四线归零买", 0) == 1,
                 data_shakeout.iloc[period].get("白线下20买", 0) == 1,
