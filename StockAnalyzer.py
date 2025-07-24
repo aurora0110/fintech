@@ -498,6 +498,7 @@ class StockMonitor:
         buyprice_amount = 0
         sellvolume_amount = 0
         buyvolume_amount = 0
+        label = False
         for _, row in df.iterrows():
             record = {
                 '成交金额': row['成交金额'],
@@ -513,27 +514,31 @@ class StockMonitor:
                 buyprice_amount += int(row['成交金额'])
                 buyvolume_amount += int(row['成交量'])
         # 获取历史上最新的数据
-        analyzer = StockAnalyzer(self.ticker, file_path)
+        analyzer = StockAnalyzer(self.ticker, self.file_path)
         price_dict = analyzer.calculate_price()
         open_price = price_dict['open_price'].iloc[-1]
         close_price = price_dict['close_price'].iloc[-1]
 
         if (close_price < open_price) and (buyvolume_amount > sellvolume_amount):
             print(f"❗️当日绿线📉，但是买入量大于卖出量，可能是有人偷偷在低位收筹码❗️")
+            label = True
         elif(close_price > open_price) and (buyvolume_amount < sellvolume_amount):
             print(f"❗️当日红线📈，但是买入量小于卖出量，可能是有人偷偷在高位卖筹码❗️")
+            label = True
         else:
             print(f"成交量无异常")
 
         if (close_price < open_price) and (buyprice_amount > sellprice_amount):
             print(f"❗️当日绿线📉，但是买入总额大于卖出总额，可能是有人偷偷在低位收筹码❗️")
+            label = True
         elif(close_price > open_price) and (buyprice_amount < sellprice_amount):
             print(f"❗️当日红线📈，但是买入总额小于卖出总额，可能是有人偷偷在高位卖筹码❗️s")
+            label = True
         else:
             print(f"成交总额无异常")
 
         print(f"当日开盘价：{open_price}，收盘价：{close_price}， {'📈' if close_price > open_price else '📉'}， 卖出总额：{sellprice_amount}，买入总额：{buyprice_amount}，卖出总量：{sellvolume_amount}，买入总量：{buyvolume_amount}")
-        return {'open_price': open_price, 'close_price': close_price, 'sellprice_amount': sellprice_amount, 'buyprice_amount': buyprice_amount, 'sellvolume_amount': sellvolume_amount, 'buyvolume_amount': buyvolume_amount}
+        return {'open_price': open_price, 'close_price': close_price, 'sellprice_amount': sellprice_amount, 'buyprice_amount': buyprice_amount, 'sellvolume_amount': sellvolume_amount, 'buyvolume_amount': buyvolume_amount, 'label':label}
 # 示例调用
 if __name__ == "__main__":
     
