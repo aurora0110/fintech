@@ -151,6 +151,25 @@ def batch_download_etf_data(symbol_list, days, start_date, end_date, year_interv
             print(f"批量获取fund：{symbol}历史数据失败")
     return all_data
 
+def download_daily_trade_volume(symbol, retry):
+    '''
+    使用腾讯接口，批量获取当日交易量信息和买卖笔数
+    '''
+    for _ in range(retry):
+        try:
+            # 自动识别市场前缀
+            market = 'sh' if symbol.startswith('6') else 'sz'
+            df = ak.stock_zh_a_tick_tx_js(symbol=f"{market}{symbol}")
+            # 清洗数据
+            df = df[['成交时间','成交价格','成交金额','成交量','性质']]
+            df['成交量'] = df['成交量'].astype(int)
+            print(f"已保存{market}{symbol}数据当日成交数据")
+            return df
+        except Exception as e:
+            print(f"第{_+1}次获取{market}{symbol}数据失败，重试中...")
+            time.sleep(1)
+
+    raise Exception(f"获取{market}{symbol}数据失败，重试次数已用完")
 def save_2_csv(data, symbol, file_path):
     """
     保存数据到单个csv文件
@@ -190,9 +209,11 @@ if __name__ == '__main__':
      #   save_2_csv(value, key)
 
     # 获取A股全部股票目录
-    df = download_stock_category()
-    category_name = "全市场etf目录" + end_date
-    save_2_csv(df, category_name, file_path)
+    #df = download_stock_category()
+    #category_name = "全市场etf目录" + end_date
+    #save_2_csv(df, category_name, file_path)
+
+    batch_download_daily_trade_volume('000001',3)
 
 
 

@@ -78,6 +78,10 @@ if __name__ == '__main__':
         stock_data = getData.batch_download_stock_data(stock_symbol_list, days="all", start_date=stock_start_date, end_date=end_date, year_interval=1)
         for key, value in stock_data.items():
             getData.save_2_csv(value, key, file_path)
+        
+        for symbol in stock_symbol_list:
+            volume_data = getData.download_daily_trade_volume(symbol, 1)
+            getData.save_2_csv(volume_data, symbol+"_volume", file_path)
 
     # 回测策略年化收益大于5%
     well_list = []
@@ -202,6 +206,7 @@ if __name__ == '__main__':
         FALLBBI_signal = False
         file_path = config.file_path 
         file_path = file_path + symbol + ".csv"
+        file_volume_path = file_path + symbol + "_volume.csv"
         backtest_log_path_new = backtest_log_path + symbol + ".txt"
         # 读取数据
         print(f"读取文件：{file_path}，回测结果保存路径：{backtest_log_path_new}")
@@ -271,7 +276,7 @@ if __name__ == '__main__':
         # 读取的代码左侧缺0，补0
         pd["code"] = pd["code"].fillna(0).astype(int).astype(str).str.zfill(6)
         pd_dict = pd.set_index("code")["name"].to_dict()
-        
+
         if J_boolean:
             stock_select_list_J.append([symbol, pd_dict[symbol]])
         
@@ -287,9 +292,9 @@ if __name__ == '__main__':
         if J_boolean and SHAKEOUT_boolean:
             stock_select_list_JS.append([symbol, pd_dict[symbol]])
         
-        Jmonitor = StockMonitor(symbol, file_path).fastdown_J()
-        ShakeOut_Monitor = StockMonitor(symbol, file_path).continuous_shakeout()
-        Frequency_Monitor = StockMonitor(symbol, file_path).check_signal_frequency()
+        Jmonitor = StockMonitor(symbol, file_path, file_volume_path).fastdown_J()
+        ShakeOut_Monitor = StockMonitor(symbol, file_path, file_volume_path).continuous_shakeout()
+        Frequency_Monitor = StockMonitor(symbol, file_path, file_volume_path).check_signal_frequency()
 
         if Jmonitor:
             stock_fast_down_j_list.append([symbol, pd_dict[symbol]])
@@ -320,4 +325,4 @@ if __name__ == '__main__':
     print(f"STOCK当日满足J值小于{J_threshold}的,且MACD水上💦的有{len(stock_select_list_JM)}个：{stock_select_list_JM}")
     print(f"✅STOCK当日满足J值小于{J_threshold}，单针下20短期指标小于20且长期指标大于60的有{len(stock_select_list_JS)}个：{stock_select_list_JS}")
     print(f"STOCK当日满足J值小于{J_threshold}，单针下20短期指标小于20且长期指标大于60，最近连续{bbi_days}天的收盘价格大于bbi的有{len(stock_select_list_JSBBI)}个：{stock_select_list_JSBBI}")
-    print(f"STOCK满足J值快速下降（3天内下降值>=50）的有{len(stock_fast_down_j_list)}个：{stock_fast_down_j_list}，满足连续2天出现洗盘信号的有{len(stock_2days_shakeout_list)}个：{stock_2days_shakeout_list}，满足10天出现3次洗盘信号的有{len(stock_5days_shakeout_list)}个：{stock_5days_shakeout_list}")
+    print(f"✅STOCK满足J值快速下降（3天内下降值>=60）的有{len(stock_fast_down_j_list)}个：{stock_fast_down_j_list}，满足连续2天出现洗盘信号的有{len(stock_2days_shakeout_list)}个：{stock_2days_shakeout_list}，满足10天出现3次洗盘信号的有{len(stock_5days_shakeout_list)}个：{stock_5days_shakeout_list}")

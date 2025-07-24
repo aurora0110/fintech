@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import plotly.subplots as sp
 import plotly.graph_objs as go
 from pathlib import Path
+import getData
 
 
 class StockAnalyzer:
@@ -41,7 +42,7 @@ class StockAnalyzer:
         except Exception as e:
             print(f"读取文件{path}失败，错误信息：{e}")
         return pd.read_csv(path, encoding="utf-8")
-    
+
     def calculate_all_indicators(self):
         self.calculate_moving_averages()
         self.calculate_bbi()
@@ -142,7 +143,8 @@ class StockAnalyzer:
         data = self.stock_data.copy()
         data['avg_price'] = (data['收盘'] + data['最高'] + data['最低']) / 3
         data['close_price'] = data['收盘']
-        return {'date': data['日期'], 'avg_price': data['avg_price'], 'close_price': data['close_price']}
+        data['open_price'] = data['开盘']
+        return {'date': data['日期'], 'avg_price': data['avg_price'], 'close_price': data['close_price'], 'open_price':data['open_price']}
 
     def calculate_macd(self, fast=12, slow=26, signal=9):
         df = self.stock_data.copy()
@@ -258,19 +260,19 @@ class StockAnalyzer:
     )
 
         # 第一行，左图 MA
-        fig.add_trace(go.Scatter(x=x_axis, y=data_ma[f'MA_{windows[0]}'], name=f'MA_{windows[0]}', line=dict(color='white')), row=1, col=1)
-        fig.add_trace(go.Scatter(x=x_axis, y=data_ma[f'MA_{windows[1]}'], name=f'MA_{windows[1]}', line=dict(color='yellow')), row=1, col=1)
+        fig.add_trace(go.Scatter(x=x_axis, y=data_ma[f'MA_{windows[0]}'], name=f'MA_{windows[0]}', line=dict(color='orange')), row=1, col=1)
+        fig.add_trace(go.Scatter(x=x_axis, y=data_ma[f'MA_{windows[1]}'], name=f'MA_{windows[1]}', line=dict(color='gray')), row=1, col=1)
         fig.add_trace(go.Scatter(x=x_axis, y=data_ma[f'MA_{windows[2]}'], name=f'MA_{windows[2]}', line=dict(color='green')), row=1, col=1)
 
         # 第一行，右图 BBI
         fig.add_trace(go.Scatter(x=x_axis, y=data_bbi['bbi'], name='BBI', line=dict(color='orange')), row=1, col=2)
 
         # 第二行，整行 price
-        fig.add_trace(go.Scatter(x=x_axis, y=data_price['avg_price'], name='avg_price', line=dict(color='yellow')), row=2, col=1)
+        fig.add_trace(go.Scatter(x=x_axis, y=data_price['avg_price'], name='avg_price', line=dict(color='gray')), row=2, col=1)
         fig.add_trace(go.Scatter(x=x_axis, y=data_price['close_price'], name='close_price', line=dict(color='green')), row=2, col=1)
 
         # 第三行，整行 KDJ-J + 高亮点
-        fig.add_trace(go.Scatter(x=x_axis, y=data_kdj['J'], name='KDJ-J', line=dict(color='yellow')), row=3, col=1)
+        fig.add_trace(go.Scatter(x=x_axis, y=data_kdj['J'], name='KDJ-J', line=dict(color='gray')), row=3, col=1)
 
         mask_low = data_kdj['J'] <= -5
         fig.add_trace(go.Scatter(
@@ -281,7 +283,7 @@ class StockAnalyzer:
             marker=dict(color='red', size=8),
             text=[f'{v:.1f}' for v in data_kdj['J'][mask_low]],
             textposition='top center',
-            textfont=dict(color='white')
+            textfont=dict(color='blue')
         ), row=3, col=1)
 
         mask_high = data_kdj['J'] > 80
@@ -293,15 +295,15 @@ class StockAnalyzer:
             marker=dict(color='green', size=8),
             text=[f'{v:.1f}' for v in data_kdj['J'][mask_high]],
             textposition='top center',
-            textfont=dict(color='white')
+            textfont=dict(color='blue')
         ), row=3, col=1)
 
         # 第四行，整行 MACD
-        fig.add_trace(go.Scatter(x=x_axis, y=data_macd['DIF'], name='DIF', line=dict(color='white')), row=4, col=1)
-        fig.add_trace(go.Scatter(x=x_axis, y=data_macd['DEA'], name='DEA', line=dict(color='yellow')), row=4, col=1)
+        fig.add_trace(go.Scatter(x=x_axis, y=data_macd['DIF'], name='DIF', line=dict(color='green')), row=4, col=1)
+        fig.add_trace(go.Scatter(x=x_axis, y=data_macd['DEA'], name='DEA', line=dict(color='gray')), row=4, col=1)
 
         # 第五行，左图 -10～90
-        fig.add_trace(go.Scatter(x=x_axis, y=data_kdj['J'], name='KDJ-J', line=dict(color='yellow')), row=5, col=1)
+        fig.add_trace(go.Scatter(x=x_axis, y=data_kdj['J'], name='KDJ-J', line=dict(color='gray')), row=5, col=1)
 
         mask_low = data_kdj['J'] <= -10
         fig.add_trace(go.Scatter(
@@ -312,7 +314,7 @@ class StockAnalyzer:
             marker=dict(color='red', size=8),
             text=[f'{v:.1f}' for v in data_kdj['J'][mask_low]],
             textposition='top center',
-            textfont=dict(color='white')
+            textfont=dict(color='blue')
         ), row=5, col=1)
 
         mask_high = data_kdj['J'] > 90
@@ -324,11 +326,11 @@ class StockAnalyzer:
             marker=dict(color='green', size=8),
             text=[f'{v:.1f}' for v in data_kdj['J'][mask_high]],
             textposition='top center',
-            textfont=dict(color='white')
+            textfont=dict(color='blue')
         ), row=5, col=1)
 
         # 第五行，右图 -15～100
-        fig.add_trace(go.Scatter(x=x_axis, y=data_kdj['J'], name='KDJ-J', line=dict(color='yellow')), row=5, col=2)
+        fig.add_trace(go.Scatter(x=x_axis, y=data_kdj['J'], name='KDJ-J', line=dict(color='gray')), row=5, col=2)
 
         mask_low = data_kdj['J'] <= -15
         fig.add_trace(go.Scatter(
@@ -339,7 +341,7 @@ class StockAnalyzer:
             marker=dict(color='red', size=8),
             text=[f'{v:.1f}' for v in data_kdj['J'][mask_low]],
             textposition='top center',
-            textfont=dict(color='white')
+            textfont=dict(color='blue')
         ), row=5, col=1)
 
         mask_high = data_kdj['J'] > 100
@@ -351,11 +353,11 @@ class StockAnalyzer:
             marker=dict(color='green', size=8),
             text=[f'{v:.1f}' for v in data_kdj['J'][mask_high]],
             textposition='top center',
-            textfont=dict(color='white')
+            textfont=dict(color='blue')
         ), row=5, col=2)
 
         # 第六行，整行 shakeout monitoring
-        fig.add_trace(go.Scatter(x=x_axis, y=data_shakeout['短期'], name='短期', line=dict(color='white')), row=6, col=1)
+        fig.add_trace(go.Scatter(x=x_axis, y=data_shakeout['短期'], name='短期', line=dict(color='green')), row=6, col=1)
         fig.add_trace(go.Scatter(x=x_axis, y=data_shakeout['长期'], name='长期', line=dict(color='red')), row=6, col=1)
 
         # 添加掩码
@@ -373,7 +375,7 @@ class StockAnalyzer:
             marker=dict(color='cyan', size=10, symbol='circle'),
             text=[f'{v:.1f}' for v in y_highlight],
             textposition='top center',
-            textfont=dict(color='white')
+            textfont=dict(color='blue')
         ), row=6, col=1)
 
         # 在第六行子图（row=6, col=1）上绘制 y=20, 60, 80 三条横线 红线在60 80之间 白线在20以下
@@ -419,9 +421,10 @@ class StockAnalyzer:
         print(f"数据已保存至：{filename}")
     
 class StockMonitor:
-    def __init__(self, ticker, file_path, start_date=None, end_date=None, lookback_period=10, min_signal_count=3):
+    def __init__(self, ticker, file_path,  file_volume_path, start_date=None, end_date=None, lookback_period=10, min_signal_count=3):
         self.ticker = ticker
         self.file_path = file_path
+        self.file_volume_path = file_volume_path
         self.start_date = start_date
         self.end_date = end_date
         self.lookback_period = lookback_period # 连续n天内出现单针下20的信号
@@ -431,7 +434,7 @@ class StockMonitor:
         analyzer = StockAnalyzer(self.ticker, self.file_path)
         data_kdj = analyzer.calculate_kdj()
         label = False
-        if (data_kdj['J'].iloc[-3] - data_kdj['J'].iloc[-1]) >= 50:
+        if (data_kdj['J'].iloc[-3] - data_kdj['J'].iloc[-1]) >= 60:
             label = True
         '''
         label = all(
@@ -462,8 +465,10 @@ class StockMonitor:
 
         return label
 
-    # 检查最近10天内是否至少有3个周期满足任意买入信号
     def check_signal_frequency(self):
+        '''
+        检查最近10天内是否至少有3个周期满足任意买入信号
+        '''
         analyzer = StockAnalyzer(self.ticker, self.file_path)
         data_shakeout = analyzer.calculate_shakeout()
         signal_count = 0
@@ -480,11 +485,62 @@ class StockMonitor:
                     return True
         return signal_count >= self.min_signal_count
 
+    def bs_abnormal_monitor(self):
+        '''
+        * 监控异常价格、买卖笔数，比如当日绿线，但是买入笔数大于卖出笔数，可能是有人在低位收筹码
+        * 开盘收盘价格是从000001.csv（历史价格）文件中获取的，开盘收盘总价和总量是从000001_volume.csv（只有每天最新的价格）文件中获取的，如果想看历史数据可以去通达信导出
+        '''
+        # 获取的是当天最新的数据
+        df = getData.read_from_csv(self.file_volume_path)
+        sell_list = []
+        buy_list = []
+        sellprice_amount = 0
+        buyprice_amount = 0
+        sellvolume_amount = 0
+        buyvolume_amount = 0
+        for _, row in df.iterrows():
+            record = {
+                '成交金额': row['成交金额'],
+                '成交量': row['成交量'],
+                '性质': row['性质']
+            }
+            if row['性质'] == '卖盘':
+                sell_list.append(record)
+                sellprice_amount += int(row['成交金额'])
+                sellvolume_amount += int(row['成交量'])
+            elif row['性质'] == '买盘':
+                buy_list.append(record)
+                buyprice_amount += int(row['成交金额'])
+                buyvolume_amount += int(row['成交量'])
+        # 获取历史上最新的数据
+        analyzer = StockAnalyzer(self.ticker, file_path)
+        price_dict = analyzer.calculate_price()
+        open_price = price_dict['open_price'].iloc[-1]
+        close_price = price_dict['close_price'].iloc[-1]
+
+        if (close_price < open_price) and (buyvolume_amount > sellvolume_amount):
+            print(f"❗️当日绿线📉，但是买入量大于卖出量，可能是有人偷偷在低位收筹码❗️")
+        elif(close_price > open_price) and (buyvolume_amount < sellvolume_amount):
+            print(f"❗️当日红线📈，但是买入量小于卖出量，可能是有人偷偷在高位卖筹码❗️")
+        else:
+            print(f"成交量无异常")
+
+        if (close_price < open_price) and (buyprice_amount > sellprice_amount):
+            print(f"❗️当日绿线📉，但是买入总额大于卖出总额，可能是有人偷偷在低位收筹码❗️")
+        elif(close_price > open_price) and (buyprice_amount < sellprice_amount):
+            print(f"❗️当日红线📈，但是买入总额小于卖出总额，可能是有人偷偷在高位卖筹码❗️s")
+        else:
+            print(f"成交总额无异常")
+
+        print(f"当日开盘价：{open_price}，收盘价：{close_price}， {'📈' if close_price > open_price else '📉'}， 卖出总额：{sellprice_amount}，买入总额：{buyprice_amount}，卖出总量：{sellvolume_amount}，买入总量：{buyvolume_amount}")
+        return {'open_price': open_price, 'close_price': close_price, 'sellprice_amount': sellprice_amount, 'buyprice_amount': buyprice_amount, 'sellvolume_amount': sellvolume_amount, 'buyvolume_amount': buyvolume_amount}
 # 示例调用
 if __name__ == "__main__":
     
     ticker = '600036.SS'
     file_path = '/Users/lidongyang/Desktop/MyInvestStrategy/GridStrategy/data/000001.csv'  # 替换为你的路径
+    file_volume_path = '/Users/lidongyang/Desktop/MyInvestStrategy/GridStrategy/data/000001_volume.csv'
+
 
     analyzer = StockAnalyzer(ticker, file_path)
     ma = analyzer.calculate_moving_averages()
@@ -493,8 +549,8 @@ if __name__ == "__main__":
     macd = analyzer.calculate_macd()
     price = analyzer.calculate_price()
     shakeout = analyzer.calculate_shakeout()
-    jlabel = StockMonitor(ticker, file_path).fastdown_J()
-    shakeout_label = StockMonitor(ticker, file_path).continuous_shakeout()
-    print(jlabel, shakeout_label)
-    #analyzer.plot_all(ma, bbi, price, macd, kdj, shakeout, '000001', windows=[20, 30, 60, 120])
+
+    StockMonitor(ticker, file_path, file_volume_path).bs_abnormal_monitor()
+    
+        #analyzer.plot_all(ma, bbi, price, macd, kdj, shakeout, '000001', windows=[20, 30, 60, 120])
     
