@@ -7,6 +7,55 @@ import plotly.graph_objs as go
 from pathlib import Path
 import getData
 
+def int_to_chinese_num(num):
+    '''
+    转换整数为中文数字
+    '''
+    if not isinstance(num, int):
+        return "请输入整数"
+
+    # 处理负数情况
+    sign = ""
+    if num < 0:
+        sign = "-"
+        num = abs(num)
+
+    if num == 0:
+        return "零"
+
+    digit_map = ["", "十", "百", "千"]
+    unit_map = ["", "万", "亿", "兆"]  # 可扩展更高单位
+    num_str = str(num)
+    length = len(num_str)
+    result = []
+
+    # 每4位一组（中文数字以万为单位）
+    for i in range(0, length, 4):
+        segment = num_str[max(0, length - i - 4): length - i]
+        segment_len = len(segment)
+        segment_str = ""
+
+        # 处理每一段（千、百、十、个位）
+        for j in range(segment_len):
+            digit = int(segment[j])
+            if digit == 0:
+                continue  # 零不单独显示，除非在中间（如 1001 → 一千零一）
+            # 添加数字和单位（如 "3" + "百" → "3百"）
+            segment_str += str(digit) + digit_map[segment_len - j - 1]
+
+        # 添加段单位（万、亿等）
+        if segment_str:  # 如果该段不为空
+            segment_str += unit_map[i // 4]
+        result.append(segment_str)
+
+    # 拼接所有段（从高到低）
+    chinese_num = "".join(reversed(result))
+
+    # 处理连续的零（如 "1001" → "一千零一"）
+    chinese_num = chinese_num.replace("零零", "零").strip("零")
+    
+    # 加上符号（如果是负数）
+    return sign + chinese_num if chinese_num else "零"
 
 class StockAnalyzer:
     def __init__(self, ticker, file_path, start_date=None, end_date=None, kdj_days = 9, kdj_m1=3, kdj_m2=3, windows = [20, 30, 60, 120]):
@@ -431,6 +480,9 @@ class StockMonitor:
         self.min_signal_count = min_signal_count # 出现n次单针下20的信号
     
     def fastdown_J(self):
+        '''
+        买入逻辑
+        '''
         analyzer = StockAnalyzer(self.ticker, self.file_path)
         data_kdj = analyzer.calculate_kdj()
         label = False
@@ -450,6 +502,9 @@ class StockMonitor:
         return label
 
     def continuous_shakeout(self):
+        '''
+        买入逻辑
+        '''
         analyzer = StockAnalyzer(self.ticker, self.file_path)
         data_shakeout = analyzer.calculate_shakeout()
         label = False
@@ -467,7 +522,7 @@ class StockMonitor:
 
     def check_signal_frequency(self):
         '''
-        检查最近10天内是否至少有3个周期满足任意买入信号
+        买入逻辑，检查最近10天内是否至少有3个周期满足任意买入信号
         '''
         analyzer = StockAnalyzer(self.ticker, self.file_path)
         data_shakeout = analyzer.calculate_shakeout()
@@ -487,6 +542,7 @@ class StockMonitor:
 
     def bs_abnormal_monitor(self):
         '''
+        * 买入、卖出逻辑
         * 监控异常价格、买卖笔数，比如当日绿线，但是买入笔数大于卖出笔数，可能是有人在低位收筹码
         * 开盘收盘价格是从000001.csv（历史价格）文件中获取的，开盘收盘总价和总量是从000001_volume.csv（只有每天最新的价格）文件中获取的，如果想看历史数据可以去通达信导出
         '''
@@ -499,6 +555,7 @@ class StockMonitor:
         sellvolume_amount = 0
         buyvolume_amount = 0
         label = False
+        abnormal_type = 'none'
         for _, row in df.iterrows():
             record = {
                 '成交金额': row['成交金额'],
@@ -522,23 +579,53 @@ class StockMonitor:
         if (close_price < open_price) and (buyvolume_amount > sellvolume_amount):
             print(f"❗️当日绿线📉，但是买入量大于卖出量，可能是有人偷偷在低位收筹码❗️")
             label = True
+            abnormal_type = 'buy'
         elif(close_price > open_price) and (buyvolume_amount < sellvolume_amount):
             print(f"❗️当日红线📈，但是买入量小于卖出量，可能是有人偷偷在高位卖筹码❗️")
             label = True
+            abnormal_type = 'sell'
         else:
             print(f"成交量无异常")
 
         if (close_price < open_price) and (buyprice_amount > sellprice_amount):
             print(f"❗️当日绿线📉，但是买入总额大于卖出总额，可能是有人偷偷在低位收筹码❗️")
             label = True
+            abnormal_type = 'buy'
         elif(close_price > open_price) and (buyprice_amount < sellprice_amount):
-            print(f"❗️当日红线📈，但是买入总额小于卖出总额，可能是有人偷偷在高位卖筹码❗️s")
+            print(f"❗️当日红线📈，但是买入总额小于卖出总额，可能是有人偷偷在高位卖筹码❗️")
             label = True
+            abnormal_type = 'sell'
         else:
             print(f"成交总额无异常")
 
-        print(f"当日开盘价：{open_price}，收盘价：{close_price}， {'📈' if close_price > open_price else '📉'}， 卖出总额：{sellprice_amount}，买入总额：{buyprice_amount}，卖出总量：{sellvolume_amount}，买入总量：{buyvolume_amount}")
-        return {'open_price': open_price, 'close_price': close_price, 'sellprice_amount': sellprice_amount, 'buyprice_amount': buyprice_amount, 'sellvolume_amount': sellvolume_amount, 'buyvolume_amount': buyvolume_amount, 'label':label}
+        # 获取总市值和总股本
+        market_cap, share_cap = getData.download_total_cap(self.ticker)
+
+        print(f"当日开盘价：{open_price}，收盘价：{close_price}， {'📈' if close_price > open_price else '📉'}， 卖出总额：{sellprice_amount}={int_to_chinese_num(sellprice_amount)}，买入总额：{buyprice_amount}={int_to_chinese_num(buyprice_amount)}，净买入总额：{buyprice_amount-sellprice_amount}={int_to_chinese_num(buyprice_amount-sellprice_amount)}，卖出总量：{sellvolume_amount}={int_to_chinese_num(sellvolume_amount)}，买入总量：{buyvolume_amount}={int_to_chinese_num(buyvolume_amount)}，净买入总量：{buyvolume_amount-sellvolume_amount}={int_to_chinese_num(buyvolume_amount-sellvolume_amount)}")
+        print(f"当前交易占总股本比重:{round(abs(buyprice_amount-sellprice_amount) / int(share_cap),3)}，占总市值比重为:{round(abs(buyprice_amount-sellprice_amount) / int(market_cap),3)}")
+        return {'open_price': open_price, 'close_price': close_price, 'sellprice_amount': sellprice_amount, 'buyprice_amount': buyprice_amount, 'sellvolume_amount': sellvolume_amount
+                , 'buyvolume_amount': buyvolume_amount, 'label':label, 'abnormal_type':abnormal_type, 'market_cap_percentage':round(abs(buyprice_amount-sellprice_amount) / int(share_cap),3)
+                , 'share_cap_percentage':round(abs(buyprice_amount-sellprice_amount) / int(market_cap),3)}
+
+    def below_bbi_monitor(self):
+        '''
+        卖出信号，跌破BBI两根卖出信号，穿柱体类型更敏感，完全跌破类型更稳定，当前为：穿柱体
+        '''
+        # 获取的是当天最新的价格数据
+        df = getData.read_from_csv(self.file_path)
+
+        analyzer = StockAnalyzer(self.ticker, self.file_path)
+        bbi = analyzer.calculate_bbi()
+
+        bbi_label = False
+
+        if (df['开盘'].iloc[-1] > bbi['bbi'].iloc[-1] > df['收盘'].iloc[-1]) and (df['开盘'].iloc[-2] > bbi['bbi'].iloc[-2] > df['收盘'].iloc[-2]):
+            bbi_label = True
+            print(f"❗️跌破BBI两根卖出信号❗️")
+        else:
+            print(f"未跌破BBI两根卖出信号")
+
+        return bbi_label
 # 示例调用
 if __name__ == "__main__":
     
@@ -555,7 +642,7 @@ if __name__ == "__main__":
     price = analyzer.calculate_price()
     shakeout = analyzer.calculate_shakeout()
 
-    StockMonitor(ticker, file_path, file_volume_path).bs_abnormal_monitor()
+    StockMonitor(ticker, file_path, file_volume_path).below_bbi_monitor()
     
         #analyzer.plot_all(ma, bbi, price, macd, kdj, shakeout, '000001', windows=[20, 30, 60, 120])
     

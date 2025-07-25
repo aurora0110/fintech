@@ -66,7 +66,6 @@ if __name__ == '__main__':
     # 下载全市场股票目录
     if categorySwitch:
         df = getData.download_stock_category()
-        
         getData.save_2_csv(df, category_name, file_path)
 
     # 下载最新数据并保存成csv文件
@@ -101,6 +100,7 @@ if __name__ == '__main__':
         file_path = config.file_path 
         file_path = file_path + symbol + ".csv"
         backtest_log_path_new = backtest_log_path + symbol + ".txt"
+        everyday_abnormal_volume_path = backtest_log_path + "abnormal_volume.txt"
         # 读取数据
         print(f"📃读取文件：{file_path}\n回测结果保存路径：{backtest_log_path_new}")
 
@@ -193,6 +193,7 @@ if __name__ == '__main__':
     stock_2days_shakeout_list = []
     stock_5days_shakeout_list = []
     stock_bs_vol_price_list = []
+    stock_below_bbi_list = []
     # 计算stock
     for symbol in stock_symbol_list:
         J_boolean = False
@@ -204,8 +205,10 @@ if __name__ == '__main__':
         file_volume_path = file_path + symbol + "_volume.csv"
         file_path = file_path + symbol + ".csv"
         backtest_log_path_new = backtest_log_path + symbol + ".txt"
+        everyday_abnormal_volume_path = backtest_log_path + "abnormal_volume.txt"
+
         # 读取数据
-        print(f"读取文件：{file_path}，回测结果保存路径：{backtest_log_path_new}")
+        print(f"读取文件：{file_path}\n回测结果保存路径：{backtest_log_path_new}")
 
         # 读取数据
         data = getData.read_from_csv(file_path)
@@ -293,6 +296,10 @@ if __name__ == '__main__':
         Frequency_Monitor = StockMonitor(symbol, file_path, file_volume_path).check_signal_frequency()
         BS_Vol_Price_Monitor = StockMonitor(symbol, file_path, file_volume_path).bs_abnormal_monitor()
 
+        if symbol in holding_stock_codes:
+            BBI_Monitor = StockMonitor(symbol, file_path, file_volume_path).below_bbi_monitor()
+            if BBI_Monitor:
+                stock_below_bbi_list.append([symbol, pd_dict[symbol]])
         if Jmonitor:
             stock_fast_down_j_list.append([symbol, pd_dict[symbol]])
         if ShakeOut_Monitor:
@@ -303,10 +310,16 @@ if __name__ == '__main__':
             stock_bs_vol_price_list.append([symbol, pd_dict[symbol]])
 
         with open(backtest_log_path_new, 'a') as f:
-            f.write(f'*************当前回测策略为：可投入金额为{amount}元，最小操作间隔为{ineterval_days}天，计划操作手数为{total_shares}手*************')    
+            f.write(f'*************当前回测策略为：可投入金额为{amount}元，最小操作间隔为{ineterval_days}天，计划操作手数为{total_shares}手************\n')    
+            f.write(f"⏰今日：{data.iloc[-1]['日期']}，{symbol}，收盘价为：{data.iloc[-1]['收盘']}，最高价为：{data.iloc[-1]['最高']}，最低价为：{data.iloc[-1]['最低']}，J值为：{round(data_kdj['J'].iloc[-1],3)}，MACD值为：{round(data_macd['DIF'].iloc[-1],3)}，单针下20短期指标为：{round(data_shakeout['短期'].iloc[-1],3)}，单针下20长期指标为：{round(data_shakeout['长期'].iloc[-1],3)}\n")
+            f.write(f"💹技术指标：J值小于{J_threshold}：{'true✅' if J_boolean else 'false❌'}，MACD指标：DIF水上：{'true✅' if MACD_boolean else 'false❌'}，单针下20短期指标小于20且长期指标大于60：{'true✅' if SHAKEOUT_boolean else 'false❌'}，最近连续{bbi_days}天的收盘价格大于bbi：{'true✅' if BBI_boolean else 'false❌'}，J值快速下降监控：{'true✅' if Jmonitor else 'false❌'}，连续洗盘信号：{'true✅' if ShakeOut_Monitor else 'false❌'}，最近5天出现3次洗盘信号：{'true✅' if Frequency_Monitor else 'false❌'}\n")
+            f.write(f"❗️异常交易金额、交易量及占比：{BS_Vol_Price_Monitor}\n")
         print(f"⏰今日：{data.iloc[-1]['日期']}，{symbol}，收盘价为：{data.iloc[-1]['收盘']}，最高价为：{data.iloc[-1]['最高']}，最低价为：{data.iloc[-1]['最低']}，J值为：{round(data_kdj['J'].iloc[-1],3)}，MACD值为：{round(data_macd['DIF'].iloc[-1],3)}，单针下20短期指标为：{round(data_shakeout['短期'].iloc[-1],3)}，单针下20长期指标为：{round(data_shakeout['长期'].iloc[-1],3)}")
         print(f"💹技术指标：J值小于{J_threshold}：{'true✅' if J_boolean else 'false❌'}，MACD指标：DIF水上：{'true✅' if MACD_boolean else 'false❌'}，单针下20短期指标小于20且长期指标大于60：{'true✅' if SHAKEOUT_boolean else 'false❌'}，最近连续{bbi_days}天的收盘价格大于bbi：{'true✅' if BBI_boolean else 'false❌'}，J值快速下降监控：{'true✅' if Jmonitor else 'false❌'}，连续洗盘信号：{'true✅' if ShakeOut_Monitor else 'false❌'}，最近5天出现3次洗盘信号：{'true✅' if Frequency_Monitor else 'false❌'}")
         print("🐤" * 95)
+    
+    with open(everyday_abnormal_volume_path, 'a') as f:
+        f.write(f"⏰今日：{data.iloc[-1]['日期']}，异常信号❗️STOCK出现异常成交量和成交额的有{len(stock_bs_vol_price_list)}个：{stock_bs_vol_price_list}\n")    
 
     print("💗" * 40, "ETF 今日数据如下", "💗" * 40)
     #print(f"ETF当前回测策略为：可投入金额💰为{amount}元，最小操作间隔为{ineterval_days}天，计划操作手数为{total_shares}手")
@@ -320,9 +333,11 @@ if __name__ == '__main__':
     #print(f"STOCK当前回测策略为：可投入金额💰为{amount}元，最小操作间隔为{ineterval_days}天，计划操作手数为{total_shares}手")
     #print(f"✅STOCK回测策略年化收益大于1️⃣0️⃣%有{len(stock_well_list)}个：{stock_well_list}，分别为：{stock_well_list}")
     #print(f"STOCK回测策略年化收益小于1️⃣0️⃣%有{len(stock_ordinary_list)}个：{stock_ordinary_list}，分别为：{stock_ordinary_list}")   
-    print(f"✅STOCK当日满足J值小于{J_threshold}的有{len(stock_select_list_J)}个：{stock_select_list_J}，❗️持有且大于9️⃣0️⃣的有{len(stock_select_list_J_sell)}个：{stock_select_list_J_sell}，⬇️单针下20信号的有{len(stock_select_list_S)}个:{stock_select_list_S}，J值快速下降的有{len(stock_fast_down_j_list)}个：{stock_fast_down_j_list}",)
-    print(f"STOCK当日满足J值小于{J_threshold}的,且MACD水上💦的有{len(stock_select_list_JM)}个：{stock_select_list_JM}")
-    print(f"✅STOCK当日满足J值小于{J_threshold}，单针下20短期指标小于20且长期指标大于60的有{len(stock_select_list_JS)}个：{stock_select_list_JS}")
-    print(f"STOCK当日满足J值小于{J_threshold}，单针下20短期指标小于20且长期指标大于60，最近连续{bbi_days}天的收盘价格大于bbi的有{len(stock_select_list_JSBBI)}个：{stock_select_list_JSBBI}")
-    print(f"✅STOCK满足J值快速下降（3天内下降值>=60）的有{len(stock_fast_down_j_list)}个：{stock_fast_down_j_list}，满足连续2天出现洗盘信号的有{len(stock_2days_shakeout_list)}个：{stock_2days_shakeout_list}，满足10天出现3次洗盘信号的有{len(stock_5days_shakeout_list)}个：{stock_5days_shakeout_list}")
-    print(f"STOCK出现异常成交量和成交额的有{len(stock_bs_vol_price_list)}个：{stock_bs_vol_price_list}")
+    print(f"买入信号✅STOCK当日满足J值小于{J_threshold}的有{len(stock_select_list_J)}个：{stock_select_list_J}，⬇️单针下20信号的有{len(stock_select_list_S)}个:{stock_select_list_S}",)
+    print(f"买入信号✅STOCK当日满足J值小于{J_threshold}的,且MACD水上💦的有{len(stock_select_list_JM)}个：{stock_select_list_JM}")
+    print(f"买入信号✅STOCK当日满足J值小于{J_threshold}，单针下20短期指标小于20且长期指标大于60的有{len(stock_select_list_JS)}个：{stock_select_list_JS}")
+    print(f"买入信号✅STOCK当日满足J值小于{J_threshold}，单针下20短期指标小于20且长期指标大于60，最近连续{bbi_days}天的收盘价格大于bbi的有{len(stock_select_list_JSBBI)}个：{stock_select_list_JSBBI}")
+    print(f"买入信号✅STOCK满足J值快速下降（3天内下降值>=60）的有{len(stock_fast_down_j_list)}个：{stock_fast_down_j_list}，满足连续2天出现洗盘信号的有{len(stock_2days_shakeout_list)}个：{stock_2days_shakeout_list}，满足10天出现3次洗盘信号的有{len(stock_5days_shakeout_list)}个：{stock_5days_shakeout_list}")
+    print(f"异常信号❗️STOCK出现异常成交量和成交额的有{len(stock_bs_vol_price_list)}个：{stock_bs_vol_price_list}")
+    print(f"卖出信号🥳持有且大于9️⃣0️⃣的有{len(stock_select_list_J_sell)}个：{stock_select_list_J_sell}")
+    print(f"卖出信号🥳持有且最近2日BBI线穿透价格柱的有{len(stock_below_bbi_list)}个：{stock_below_bbi_list}")

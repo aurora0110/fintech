@@ -6,7 +6,7 @@ import getData as gd
 入参
 """
 # 开关
-downloadNewDataSwitch = False # 是否下载新的数据，如果为True，则下载新的数据，如果为False，则使用已有的数据
+downloadNewDataSwitch = True # 是否下载新的数据，如果为True，则下载新的数据，如果为False，则使用已有的数据
 figSwitch = False # 是否绘制图形，如果为True，则绘制图形，如果为False，则不绘制图形
 volatilitySwitch = False # 是否计算波动率、极值点、平均值
 categorySwitch = False # 下载目录开关

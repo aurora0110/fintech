@@ -7,6 +7,7 @@ import time
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import config
+from utils import int2chinese
 
 
 def download_stock_data(symbol, start_date, end_date, adjust='qfq'):
@@ -151,7 +152,7 @@ def batch_download_etf_data(symbol_list, days, start_date, end_date, year_interv
             print(f"批量获取fund：{symbol}历史数据失败")
     return all_data
 
-def download_daily_trade_volume(symbol, retry):
+def download_daily_trade_volume(symbol, retry):   
     '''
     使用腾讯接口，批量获取当日交易量信息和买卖笔数
     '''
@@ -195,6 +196,18 @@ def read_from_csv(file_path):
     except Exception as e:
         print(f"读取文件{path}失败，错误信息：{e}")
         return pd.read_csv(path, encoding="utf-8")
+    
+def download_total_cap(symbol):
+    '''
+    获取总市值和总股本
+    '''
+    stock_info = ak.stock_individual_info_em(symbol=symbol)
+
+    # 提取总市值和总股本字段（单位是元）
+    market_cap1 = stock_info[stock_info['item'] == '总市值'].iloc[0]['value']
+    market_cap2 = stock_info[stock_info['item'] == '总股本'].iloc[0]['value']
+    print(f"{symbol} 的总市值为：{int2chinese.int_to_chinese_num(int(market_cap1))}，{symbol} 的总股本为：{int2chinese.int_to_chinese_num(int(market_cap2))}")
+    return int(market_cap1), int(market_cap2)
 
 if __name__ == '__main__':
     
@@ -213,7 +226,7 @@ if __name__ == '__main__':
     #category_name = "全市场etf目录" + end_date
     #save_2_csv(df, category_name, file_path)
 
-    batch_download_daily_trade_volume('000001',3)
+    download_daily_trade_volume('000001')
 
 
 
