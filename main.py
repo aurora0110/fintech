@@ -90,7 +90,6 @@ if __name__ == '__main__':
     select_list_JS = []
     select_list_JSBBI = []
     select_list_JM = []
-
     # 计算ETF
     for symbol in etf_symbol_list:
         J_boolean = False
@@ -194,6 +193,7 @@ if __name__ == '__main__':
     stock_5days_shakeout_list = []
     stock_bs_vol_price_list = []
     stock_below_bbi_list = []
+    stock_holding_codes = []
     # 计算stock
     for symbol in stock_symbol_list:
         J_boolean = False
@@ -226,7 +226,6 @@ if __name__ == '__main__':
             extremaPoints = cep.one_years_extrema_points(file_path)
             # 计算平均值 1 2 3 4 5
             extremaPoints = cap.x_years_avg_points(file_path,3)
-
 
         analyzer = StockAnalyzer(symbol, file_path)
         data_ma = analyzer.calculate_moving_averages()
@@ -275,6 +274,10 @@ if __name__ == '__main__':
         # 读取的代码左侧缺0，补0
         pd["code"] = pd["code"].fillna(0).astype(int).astype(str).str.zfill(6)
         pd_dict = pd.set_index("code")["name"].to_dict()
+
+        if symbol in holding_stock_codes:
+            print('+++++++++++++++++++++++++++++++++',symbol)
+            stock_holding_codes.append([symbol, pd_dict[symbol]])
 
         if J_boolean:
             stock_select_list_J.append([symbol, pd_dict[symbol]])
@@ -339,5 +342,6 @@ if __name__ == '__main__':
     print(f"买入信号✅STOCK当日满足J值小于{J_threshold}，单针下20短期指标小于20且长期指标大于60，最近连续{bbi_days}天的收盘价格大于bbi的有{len(stock_select_list_JSBBI)}个：{stock_select_list_JSBBI}")
     print(f"买入信号✅STOCK满足J值快速下降（3天内下降值>=60）的有{len(stock_fast_down_j_list)}个：{stock_fast_down_j_list}，满足连续2天出现洗盘信号的有{len(stock_2days_shakeout_list)}个：{stock_2days_shakeout_list}，满足10天出现3次洗盘信号的有{len(stock_5days_shakeout_list)}个：{stock_5days_shakeout_list}")
     print(f"异常信号❗️STOCK出现异常成交量和成交额的有{len(stock_bs_vol_price_list)}个：{stock_bs_vol_price_list}")
+    print(f"当前持有{len(stock_holding_codes)}个：{stock_holding_codes}")
     print(f"卖出信号🥳持有且大于9️⃣0️⃣的有{len(stock_select_list_J_sell)}个：{stock_select_list_J_sell}")
     print(f"卖出信号🥳持有且最近2日BBI线穿透价格柱的有{len(stock_below_bbi_list)}个：{stock_below_bbi_list}")
