@@ -17,6 +17,7 @@ import os
 from StockAnalyzer import StockAnalyzer
 from StockAnalyzer import StockMonitor
 from utils import holdingConfig
+from tqdm import tqdm
 
 if __name__ == '__main__':
     # 读取参数
@@ -90,8 +91,15 @@ if __name__ == '__main__':
     select_list_JS = []
     select_list_JSBBI = []
     select_list_JM = []
+    select_list_S = [] 
+    fast_down_j_list = []
+    etf_2days_shakeout_list = []
+    etf_5days_shakeout_list = []
+    bs_vol_price_list = []
+    below_bbi_list = []
+    holding_codes = []
     # 计算ETF
-    for symbol in etf_symbol_list:
+    for symbol in tqdm(etf_symbol_list):
         J_boolean = False
         SHAKEOUT_boolean = False
         BBI_boolean = False
@@ -115,10 +123,11 @@ if __name__ == '__main__':
         data_rsv = calRSV.calrsv(data, 9)
 
         # 计算时间窗口内的价格波动幅度
-        day_window = 100
-        range = ctr.cal_range(data, day_window)
-        ctr.cal_volatility(data, day_window)
-        atr = ctr.cal_ATR(data, day_window)
+        if volatility:
+            day_window = 100
+            range = ctr.cal_range(data, day_window)
+            ctr.cal_volatility(data, day_window)
+            atr = ctr.cal_ATR(data, day_window)
 
         analyzer = StockAnalyzer(symbol, file_path)
         data_ma = analyzer.calculate_moving_averages()
@@ -195,7 +204,7 @@ if __name__ == '__main__':
     stock_below_bbi_list = []
     stock_holding_codes = []
     # 计算stock
-    for symbol in stock_symbol_list:
+    for symbol in tqdm(stock_symbol_list):
         J_boolean = False
         SHAKEOUT_boolean = False
         BBI_boolean = False
@@ -323,7 +332,6 @@ if __name__ == '__main__':
     
     with open(everyday_abnormal_volume_path, 'a') as f:
         f.write(f"⏰今日：{data.iloc[-1]['日期']}，异常信号❗️STOCK出现异常成交量和成交额的有{len(stock_bs_vol_price_list)}个：{stock_bs_vol_price_list}\n")    
-
     print("💗" * 40, "ETF 今日数据如下", "💗" * 40)
     #print(f"ETF当前回测策略为：可投入金额💰为{amount}元，最小操作间隔为{ineterval_days}天，计划操作手数为{total_shares}手")
     #print(f"✅ETF回测策略年化收益大于1️⃣0️⃣%有{len(well_list)}个：{well_list}，分别为：{well_list}")
