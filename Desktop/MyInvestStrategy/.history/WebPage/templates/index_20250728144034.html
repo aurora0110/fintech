@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>问候应用</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+  
+  <!-- Tailwind 配置 -->
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            primary: '#1E40AF', // 深蓝色作为主色调
+            secondary: '#3B82F6', // 蓝色作为辅助色
+            accent: '#F59E0B', // 橙色作为强调色
+          },
+          fontFamily: {
+            sans: ['Inter', 'system-ui', 'sans-serif'],
+          },
+        },
+      }
+    }
+  </script>
+  
+  <style type="text/tailwindcss">
+    @layer utilities {
+      .content-auto {
+        content-visibility: auto;
+      }
+      .text-shadow {
+        text-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      }
+      .transition-transform-opacity {
+        transition-property: transform, opacity;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="min-h-screen flex flex-col">
+    <!-- 顶部导航栏 -->
+    <nav class="bg-primary text-white shadow-md">
+      <div class="container mx-auto px-4 py-3 flex justify-between items-center">
+        <div class="flex items-center space-x-2">
+          <i class="fa fa-line-chart text-2xl"></i>
+          <h1 class="text-xl font-bold">金融工具箱</h1>
+        </div>
+        <div class="relative hidden md:block">
+          <button id="toolToggleBtn" class="hover:text-accent transition-colors font-medium focus:outline-none">
+            工具 <i class="fa fa-caret-down ml-1"></i>
+          </button>
+          <div id="toolDropdown" class="absolute hidden bg-white text-gray-700 shadow-lg rounded-lg mt-2 py-2 min-w-[180px] z-50">
+            <a href="#" id="openCompound" class="block px-4 py-2 hover:bg-gray-100">复利计算器</a>
+            <a href="#" id="openMortgage" class="block px-4 py-2 hover:bg-gray-100">房贷计算器</a>
+            <a href="#" id="openCurrency" class="block px-4 py-2 hover:bg-gray-100">汇率换算器</a>
+          </div>
+        </div>           
+        <button class="md:hidden text-white focus:outline-none">
+          <i class="fa fa-bars text-xl"></i>
+        </button>
+      </div>
+    </nav>
+
+    <!-- 主要内容区域 -->
+    <main class="flex-grow">
+      <!-- 上半部分 - 图片区域 -->
+      <section class="relative h-[50vh] min-h-[400px] overflow-hidden">
+        <div class="absolute inset-0 bg-black/30 z-10"></div>
+        <img 
+          src="https://picsum.photos/id/1015/1920/1080" 
+          alt="金融市场图表背景" 
+          class="w-full h-full object-cover object-center"
+        >
+        <div class="absolute inset-0 z-20 flex flex-col justify-center items-center text-white text-center px-4">
+          <h2 class="text-[clamp(2rem,5vw,3.5rem)] font-bold mb-4 text-shadow animate-fade-in">
+            便捷金融工具
+          </h2>
+          <p class="text-[clamp(1rem,2vw,1.25rem)] max-w-2xl mb-8 text-shadow opacity-90">
+            一站式金融服务平台，提供实时汇率查询、投资计算等实用工具
+          </p>
+          <div class="flex flex-col sm:flex-row gap-4">
+            <button id="openCalcBtn" class="bg-accent hover:bg-accent/90 text-white font-medium py-3 px-8 rounded-lg shadow-lg transform hover:scale-105 transition-all duration-300">
+              <i class="fa fa-calculator mr-1"></i>人民币-外币存款转换计算器
+            </button>
+
+            <!-- 外币-人民币存款计算器 -->
+            <div id="calcModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center hidden z-50">
+              <div class="bg-white rounded-lg p-6 w-[300px] shadow-xl relative">
+                <h2 class="text-lg font-semibold mb-4 text-gray-800">人民币-外币存款转换计算器</h2>
+                <label class="block mb-2 text-base text-gray-800 text-left">人民币存款利率：</label>
+                <input id="rmbInput" type="number" class="w-full mb-3 border px-3 py-2 rounded text-gray-800" placeholder="请输入人民币存款利率，例如：0.01">
+                <label class="block mb-2 text-base text-gray-800 text-left">外币存款利率：</label>
+                <input id="coinInput" type="number" class="w-full mb-3 border px-3 py-2 rounded text-gray-800" placeholder="请输入外币存款利率，例如：0.05">
+                <label class="block mb-2 text-base text-gray-800 text-left">当前汇率：</label>
+                <input id="rateInput" type="number" class="w-full mb-3 border px-3 py-2 rounded text-gray-800" placeholder="请输入当前汇率，例如：7.2">
+                <button id="calcBtn" class="bg-blue-500 text-white w-full py-2 rounded hover:bg-blue-600">计算</button>
+                <div id="result" class="mt-4 text-center text-green-600 font-bold"></div>
+                <button id="closeCoinRmbModal" class="mt-4 text-sm text-gray-500 underline">关闭</button>
+              </div>
+            </div>
+            <button class="bg-transparent border-2 border-white hover:bg-white/10 text-white font-medium py-3 px-8 rounded-lg shadow-lg transform hover:scale-105 transition-all duration-300">
+              <i class="fa fa-info-circle mr-2"></i>了解更多
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 下半部分 - 按钮区域 -->
+      <section class="py-16 bg-white">
+        <div class="container mx-auto px-4 text-center">
+          <h3 class="text-[clamp(1.5rem,3vw,2.5rem)] font-bold text-gray-800 mb-4">
+            实时汇率查询
+          </h3>
+          <p class="text-gray-600 max-w-2xl mx-auto mb-12 text-lg">
+            随时掌握全球主要货币汇率，助您做出更明智的金融决策
+          </p>
+          
+          <button id="openRateBtn" class="bg-primary hover:bg-primary/90 text-white font-bold py-4 px-12 rounded-xl shadow-xl transform hover:scale-105 transition-all duration-300 text-xl flex items-center mx-auto">
+            <i class="fa fa-money mr-3 text-2xl"></i>
+            立即查询汇率
+          </button>
+
+          <!-- 汇率查询结果弹窗 -->
+          <div id="exchangeModal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50">
+            <div class="bg-white rounded-lg shadow-lg p-6 w-80 relative">
+              <h2 class="text-xl font-bold mb-4 text-center">人民币实时汇率</h2>
+              <div id="exchangeResult" class="text-gray-700 space-y-2 text-center">
+                <!-- 汇率结果会插入这里 -->
+              </div>
+              <button id="closeExchangeModal" class="absolute top-2 right-2 text-gray-400 hover:text-gray-700">
+                <i class="fa fa-times"></i>
+              </button>
+            </div>
+          </div>
+
+          <!-- 汇率更新时间 -->
+          <p class="mt-8 text-sm text-gray-500">
+            <i class="fa fa-clock-o mr-1"></i>
+            汇率数据每15分钟更新一次 | 最后更新：2025年6月8日 12:30
+          </p>
+        </div>
+      </section>
+    </main>
+
+    <!-- 页脚 -->
+    <footer class="bg-gray-900 text-white py-10">
+      <div class="container mx-auto px-4">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+          <div>
+            <h4 class="text-lg font-bold mb-4 flex items-center">
+              <i class="fa fa-line-chart mr-2"></i>金融工具箱
+            </h4>
+            <p class="text-gray-400">
+              提供专业的金融工具和服务，帮助您做出更明智的财务决策。
+            </p>
+            <div class="mt-4 flex space-x-4">
+              <a href="#" class="text-gray-400 hover:text-white transition-colors">
+                <i class="fa fa-facebook"></i>
+              </a>
+              <a href="#" class="text-gray-400 hover:text-white transition-colors">
+                <i class="fa fa-twitter"></i>
+              </a>
+              <a href="#" class="text-gray-400 hover:text-white transition-colors">
+                <i class="fa fa-linkedin"></i>
+              </a>
+              <a href="#" class="text-gray-400 hover:text-white transition-colors">
+                <i class="fa fa-instagram"></i>
+              </a>
+            </div>
+          </div>
+          
+          <div>
+            <h4 class="text-lg font-bold mb-4">快速链接</h4>
+            <ul class="space-y-2">
+              <li><a href="#" class="text-gray-400 hover:text-white transition-colors">首页</a></li>
+              <li><a href="#" class="text-gray-400 hover:text-white transition-colors">汇率查询</a></li>
+              <li><a href="#" class="text-gray-400 hover:text-white transition-colors">投资计算器</a></li>
+              <li><a href="#" class="text-gray-400 hover:text-white transition-colors">财经日历</a></li>
+              <li><a href="#" class="text-gray-400 hover:text-white transition-colors">市场动态</a></li>
+            </ul>
+          </div>
+          
+          <div>
+            <h4 class="text-lg font-bold mb-4">联系我们</h4>
+            <ul class="space-y-2">
+              <li class="flex items-start">
+                <i class="fa fa-map-marker mt-1 mr-3 text-gray-400"></i>
+                <span class="text-gray-400">北京市朝阳区金融中心A座15层</span>
+              </li>
+              <li class="flex items-center">
+                <i class="fa fa-phone mr-3 text-gray-400"></i>
+                <span class="text-gray-400">+86 10 8888 8888</span>
+              </li>
+              <li class="flex items-center">
+                <i class="fa fa-envelope mr-3 text-gray-400"></i>
+                <span class="text-gray-400">contact@financialtool.com</span>
+              </li>
+            </ul>
+          </div>
+        </div>
+        
+        <div class="border-t border-gray-800 mt-8 pt-8 text-center text-gray-500 text-sm">
+          <p>© 2025 金融工具箱. 保留所有权利.</p>
+        </div>
+      </div>
+    </footer>
+  </div>
+
+  <h1>请输入你的名字：</h1>
+  <input type="text" id="nameInput" />
+  <button onclick="sendName()">提交</button>
+
+  <p id="responseText"></p>
+
+  <script>
+    function sendName() {
+      const name = document.getElementById('nameInput').value;
+
+      fetch('http://localhost:5004/greet', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name }),
+      })
+      .then(res => {
+        if (!res.ok) throw new Error('网络错误，状态码：' + res.status);
+        return res.json();
+      })
+      .then(data => {
+        document.getElementById('responseText').innerText = data.greeting;
+      })
+      .catch(err => {
+        console.error(err);
+        alert('请求失败：' + err.message);
+      });
+    }
+  </script>
+</body>
+</html>

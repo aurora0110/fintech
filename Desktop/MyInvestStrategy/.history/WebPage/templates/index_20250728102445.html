@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>问候应用</title>
+</head>
+<body>
+  <h1>请输入你的名字：</h1>
+  <input type="text" id="nameInput" />
+  <button onclick="sendName()">提交</button>
+
+  <p id="responseText"></p>
+
+  <script>
+    function sendName() {
+      const name = document.getElementById('nameInput').value;
+
+      fetch('http://localhost:5004/greet', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name }),
+      })
+      .then(res => {
+        if (!res.ok) throw new Error('网络错误，状态码：' + res.status);
+        return res.json();
+      })
+      .then(data => {
+        document.getElementById('responseText').innerText = data.greeting;
+      })
+      .catch(err => {
+        console.error(err);
+        alert('请求失败：' + err.message);
+      });
+    }
+  </script>
+</body>
+</html>

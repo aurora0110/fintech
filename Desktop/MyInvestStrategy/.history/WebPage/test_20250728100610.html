@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>金融工具 | 汇率查询</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+    
+    <!-- Tailwind 配置 -->
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              primary: '#1E40AF', // 深蓝色作为主色调
+              secondary: '#3B82F6', // 蓝色作为辅助色
+              accent: '#F59E0B', // 橙色作为强调色
+            },
+            fontFamily: {
+              sans: ['Inter', 'system-ui', 'sans-serif'],
+            },
+          },
+        }
+      }
+    </script>
+    
+    <style type="text/tailwindcss">
+      @layer utilities {
+        .content-auto {
+          content-visibility: auto;
+        }
+        .text-shadow {
+          text-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .transition-transform-opacity {
+          transition-property: transform, opacity;
+        }
+      }
+    </style>
+  </head>
+<body>
+  <h1>请输入你的名字：</h1>
+  <input type="text" id="nameInput" />
+  <button onclick="sendName()">提交</button>
+
+  <p id="responseText"></p>
+
+  <script>
+    function sendName() {
+      const name = document.getElementById('nameInput').value;
+
+      fetch('http://localhost:5004/greet', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name }),
+      })
+      .then(res => {
+        if (!res.ok) throw new Error('网络错误，状态码：' + res.status);
+        return res.json();
+      })
+      .then(data => {
+        document.getElementById('responseText').innerText = data.greeting;
+      })
+      .catch(err => {
+        console.error(err);
+        alert('请求失败：' + err.message);
+      });
+    }
+  </script>
+</body>
+</html>
