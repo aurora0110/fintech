@@ -1,0 +1,1 @@
+b3price_range_threshold = 0.05 # b3收盘价不能低于前一日收盘价5%

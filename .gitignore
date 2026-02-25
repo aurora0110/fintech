@@ -1,0 +1,6 @@
+__pycache__/
+.history/
+*.csv
+*.pyc
+data/
+results/

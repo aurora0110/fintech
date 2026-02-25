@@ -1,0 +1,102 @@
+# 技术配置文件
+# 按照Python程序分类组织硬编码参数
+
+# b1filter.py - B1买入条件筛选逻辑
+b1filter:
+  # 数值参数
+  numerical:
+    j_threshold: 13  # J值阈值
+    volume_periods: [5, 10, 20, 30]  # 地量低价计算周期
+    volume_ratio: 1.382  # 阳线成交量/阴线成交量比例
+    consistency_threshold: 3  # 涨幅一致性阈值
+    consistency_tolerance: 2.5  # 涨幅一致性容差
+    retracement_threshold: 2  # 回踩阈值
+    retracement_tolerance: 2  # 回踩容差
+    big_bullish_threshold: 8  # 大阳线涨幅阈值(%)
+    volume_increase_ratio: 3  # 放量比例
+    prev_day_range_threshold: 2  # 前一日价差幅阈值(%)
+    current_day_range_threshold: 4  # 当日价差幅阈值(%)
+    recent_days: 20  # 最近一个月数据天数
+  
+  # 字符串参数
+  string:
+    columns:  # 数据列名
+      - '日期'
+      - '最高'
+      - '最低'
+      - '收盘'
+      - '开盘'
+      - '成交量'
+      - '成交额'
+    technical_labels:  # 技术分析标签
+      - '一致'
+      - '20日线回踩'
+      - '60日线回踩'
+      - '黄线回踩'
+      - '白线回踩'
+      - '回踩多空线'
+      - '回踩短期趋势线'
+    filter_reasons:  # 筛选原因
+      - 'SB1条件'
+      - '回踩均线'
+      - '回踩趋势线'
+      - '第一次回踩'
+      - '地量低价'
+      - '跳空K线'
+      - '长阴短柱'
+      - '缩量且涨幅一致'
+      - '其他原因'
+    trend_lines:  # 趋势线名称
+      - '知行多空线'
+      - '知行短期趋势线'
+
+# dashboard.py - 仪表盘展示逻辑
+dashboard:
+  # 数值参数
+  numerical:
+    date_format: '%Y%m%d'  # 日期格式
+  
+  # 字符串参数
+  string:
+    file_paths:  # 文件路径
+      holding_yaml: '/Users/lidongyang/Desktop/Qstrategy/config/holding.yaml'
+      results_dir: '/Users/lidongyang/Desktop/Qstrategy/results'
+      data_dir: '/Users/lidongyang/Desktop/Qstrategy/data'
+      default_result_file: '20260206.json'
+    columns:  # 列名
+      b_columns: ['股票代码', '止损价', '收盘价', '盈亏比', '筛选原因']
+      sell_columns: ['股票代码', '操作']
+      hold_columns_full: ['股票代码', '股票名称', '买入类型', '止损价格', '止盈价格', '持仓天数', '持仓占比', '备注信息']
+      hold_columns_simple: ['股票代码', '操作']
+      pin_columns: ['股票代码']
+      watch_columns: ['股票代码', '股票名称', '类型', '备注']
+    navigation_options:  # 导航栏选项
+      - 'B1买入条件'
+      - 'B3买入条件'
+      - '单针筛选结果'
+      - '持有股票监控'
+      - '卖出股票列表'
+      - '重点关注股票'
+    stock_prefixes:  # 股票代码前缀
+      - 'SH'
+      - 'SZ'
+      - 'BJ'
+
+# pinfilter.py - 单针筛选逻辑
+pinfilter:
+  # 数值参数
+  numerical:
+    volume_ratio: 0.5  # 今日成交量/30日内最高成交量
+    rsi_periods: [14, 28, 57]  # RSI周期
+
+# technical_indicators.py - 技术指标计算
+technical_indicators:
+  # 数值参数
+  numerical:
+    kdj:  # KDJ参数
+      n: 9
+      m1: 3
+      m2: 3
+    ma:  # 移动平均线周期
+      short: 20
+      long: 60
