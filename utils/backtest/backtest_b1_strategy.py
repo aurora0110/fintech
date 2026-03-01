@@ -25,25 +25,118 @@ def write_log(content):
         f.write(new_record + old)
 
 
+def check_data_anomaly(df):
+    anomaly_dates = set()
+    
+    if len(df) < 2:
+        return anomaly_dates
+    
+    for i in range(len(df)):
+        row = df.iloc[i]
+        open_p = row['OPEN']
+        high = row['HIGH']
+        low = row['LOW']
+        close = row['CLOSE']
+        volume = row['VOLUME']
+        
+        if pd.isna(open_p) or pd.isna(high) or pd.isna(low) or pd.isna(close):
+            anomaly_dates.add(df.index[i])
+            continue
+        
+        if high == low == close:
+            anomaly_dates.add(df.index[i])
+            continue
+        
+        if i > 0:
+            prev_close = df.iloc[i-1]['CLOSE']
+            if prev_close > 0:
+                change_pct = (close - prev_close) / prev_close * 100
+                if change_pct > 20 or change_pct < -20:
+                    anomaly_dates.add(df.index[i])
+                    continue
+        
+        if volume <= 0:
+            anomaly_dates.add(df.index[i])
+            continue
+        
+        if i >= 60:
+            rolling_vol = df.iloc[i-60:i]['VOLUME']
+            avg_vol = rolling_vol.mean()
+            if avg_vol > 0 and volume > avg_vol * 5:
+                anomaly_dates.add(df.index[i])
+                continue
+        
+        if open_p < low or open_p > high:
+            anomaly_dates.add(df.index[i])
+            continue
+        
+        if high > 0 and low > 0:
+            amplitude = (high - low) / low * 100
+            if i > 0:
+                prev_vol = df.iloc[i-1]['VOLUME']
+                vol_change = volume / prev_vol if prev_vol > 0 else 1
+                if amplitude > 15 and vol_change < 1.2:
+                    anomaly_dates.add(df.index[i])
+                    continue
+        
+        if i >= 1:
+            for j in range(1, min(6, i+1)):
+                if i - j >= 0:
+                    prev_change = (df.iloc[i-j]['CLOSE'] - df.iloc[i-j-1]['CLOSE']) / df.iloc[i-j-1]['CLOSE'] * 100
+                    if prev_change < -15:
+                        anomaly_dates.add(df.index[i])
+                        break
+    
+    if len(df) >= 2:
+        first_price = df.iloc[0]['CLOSE']
+        last_price = df.iloc[-1]['CLOSE']
+        if first_price > 0 and last_price > 0:
+            total_change = (last_price - first_price) / first_price
+            if abs(total_change) > 100:
+                for idx in df.index:
+                    anomaly_dates.add(idx)
+        
+        if last_price < 0.5:
+            for idx in df.index:
+                anomaly_dates.add(idx)
+        
+        if i >= 1 and first_price > 0:
+            avg_vol = df.iloc[:-1]['VOLUME'].mean()
+            if avg_vol > 0:
+                turnover = df.iloc[-1]['VOLUME'] * close
+                avg_turnover = avg_vol * first_price
+                if avg_turnover > 0 and turnover < avg_turnover * 0.001:
+                    anomaly_dates.add(df.index[-1])
+    
+    return anomaly_dates
+
+
 def load_stock(path):
-    try:
-        df = pd.read_csv(
-            path,
-            sep=r"\s+",
-            engine="python",
-            header=1,
-            encoding="gbk"
-        )
-        df.columns = ["日期", "OPEN", "HIGH", "LOW", "CLOSE", "VOLUME", "成交额"][:len(df.columns)]
-        df = df[["日期", "OPEN", "HIGH", "LOW", "CLOSE", "VOLUME"]]
-        df = df[pd.to_numeric(df["OPEN"], errors="coerce").notna()]
-        df["日期"] = pd.to_datetime(df["日期"])
-        df = df.sort_values("日期")
-        df.set_index("日期", inplace=True)
-        df = df[~df.index.duplicated(keep='first')]
-        return df
-    except:
-        return None
+    encodings = ['gbk', 'utf-8', 'gb18030', 'latin-1']
+    df = None
+    
+    for encoding in encodings:
+        try:
+            df = pd.read_csv(
+                path,
+                sep=r"\s+",
+                engine="python",
+                header=1,
+                encoding=encoding
+            )
+            df.columns = ["日期", "OPEN", "HIGH", "LOW", "CLOSE", "VOLUME", "成交额"][:len(df.columns)]
+            df = df[["日期", "OPEN", "HIGH", "LOW", "CLOSE", "VOLUME"]]
+            df = df[pd.to_numeric(df["OPEN"], errors="coerce").notna()]
+            df["日期"] = pd.to_datetime(df["日期"], errors='coerce')
+            df = df[df["日期"].notna()]
+            df = df.sort_values("日期")
+            df.set_index("日期", inplace=True)
+            df = df[~df.index.duplicated(keep='first')]
+            return df
+        except Exception as e:
+            continue
+    
+    return None
 
 
 def calculate_indicators(df):
@@ -254,6 +347,8 @@ def analyze_factors(stock_data, daily_signals, daily_scores, all_dates, date_to_
                 continue
             
             for factor_name in details.keys():
+                if factor_name not in FACTOR_SCORES:
+                    continue
                 factor_returns[factor_name].append({
                     'date': current_date,
                     'entry_price': entry_p,
@@ -324,7 +419,9 @@ def analyze_factors(stock_data, daily_signals, daily_scores, all_dates, date_to_
 def run_backtest(data_dir,
                  initial_capital=1_000_000,
                  max_positions=10,
-                 min_score=0.5):
+                 min_score=0.5,
+                 fail_pause_X=3,
+                 fail_pause_Y=2):
     
     cache_file = "/tmp/b1_cache.pkl"
     
@@ -346,6 +443,7 @@ def run_backtest(data_dir,
         
         print(f"加载 {total} 只股票...")
         
+        loaded_count = 0
         for idx, file in enumerate(files, 1):
             if idx % 500 == 0:
                 print(f"[加载 {idx}/{total}]")
@@ -353,6 +451,8 @@ def run_backtest(data_dir,
             df = load_stock(os.path.join(data_dir, file))
             if df is None or len(df) < 130:
                 continue
+            
+            loaded_count += 1
             
             df = calculate_indicators(df)
             stock_data[file] = df
@@ -366,6 +466,12 @@ def run_backtest(data_dir,
                         daily_scores[date] = []
                     daily_signals[date].append(file)
                     daily_scores[date].append((file, score, details))
+            
+            if loaded_count >= 500:
+                print(f"已达到测试数量 500，停止加载")
+                break
+        
+        print(f"成功加载 {loaded_count} 只股票")
         
         all_dates = sorted(set().union(*[df.index for df in stock_data.values()]))
         
@@ -395,12 +501,16 @@ def run_backtest(data_dir,
     loss_count = 0
     max_consecutive_losses = 0
     current_consecutive_losses = 0
+    pause_trading_days = 0
     
     yearly_returns = {}
     
     for current_date in all_dates:
         if stopped:
             break
+        
+        if pause_trading_days > 0:
+            pause_trading_days -= 1
         
         current_idx = date_to_idx[current_date]
         new_positions = []
@@ -521,7 +631,11 @@ def run_backtest(data_dir,
             # 止盈全部完成后，连续两天收盘价低于前一日最低则全部平仓
             if pos.get('dev25_done', False) and total_sold_ratio >= 1.0:
                 if holding_days >= 2:
-                    prev_k_low = df.iloc[current_idx - 1]['LOW'] if current_idx > entry_idx else close
+                    stock_idx = df.index.get_loc(current_date)
+                    if stock_idx > 0:
+                        prev_k_low = df.iloc[stock_idx - 1]['LOW']
+                    else:
+                        prev_k_low = close
                     if close < prev_k_low:
                         if pos.get('consecutive_low_days', 0) >= 1:
                             exit_flag = True
@@ -534,9 +648,10 @@ def run_backtest(data_dir,
                         pos['consecutive_low_days'] = 0
             
             if not exit_flag and holding_days >= 1:
-                if current_idx > 0:
-                    prev_dk = df.iloc[current_idx - 1]['知行多空线']
-                    prev_trend = df.iloc[current_idx - 1]['知行短期趋势线']
+                stock_idx = df.index.get_loc(current_date)
+                if stock_idx > 0:
+                    prev_dk = df.iloc[stock_idx - 1]['知行多空线']
+                    prev_trend = df.iloc[stock_idx - 1]['知行短期趋势线']
                     if not pd.isna(prev_dk) and not pd.isna(prev_trend):
                         if prev_dk <= prev_trend and dk_line > trend_line:
                             exit_flag = True
@@ -545,7 +660,10 @@ def run_backtest(data_dir,
             
             # 60日最大量阴线分批卖出
             if not exit_flag and holding_days >= 60:
-                rolling_vol = df.iloc[max(0, current_idx-60):current_idx]['VOLUME']
+                stock_idx = df.index.get_loc(current_date)
+                rolling_vol = df.iloc[max(0, stock_idx-60):stock_idx]['VOLUME']
+                if len(rolling_vol) == 0:
+                    continue
                 max_vol_idx = rolling_vol.idxmax()
                 if max_vol_idx in df.index:
                     max_vol_row = df.loc[max_vol_idx]
@@ -590,6 +708,8 @@ def run_backtest(data_dir,
                     loss_count += 1
                     current_consecutive_losses += 1
                     max_consecutive_losses = max(max_consecutive_losses, current_consecutive_losses)
+                    if current_consecutive_losses >= fail_pause_X:
+                        pause_trading_days = fail_pause_Y
                 
                 year = current_date.year
                 if year not in yearly_returns:
@@ -621,6 +741,9 @@ def run_backtest(data_dir,
         
         available_slots = max_positions - len(positions)
         if available_slots <= 0:
+            continue
+        
+        if pause_trading_days > 0:
             continue
         
         scores_today = [s for s in daily_scores[current_date] if s[1] >= min_score]
@@ -739,7 +862,7 @@ def run_backtest(data_dir,
             print(f"{year}年: 交易次数={len(returns)}, 平均收益率={avg_ret:.2f}%, 胜率={win_rate:.1f}%")
     
     strategy_desc = """
-===== B1 评分系统 =====
+===== B1 评分系统 (精简版 - 5个核心因子) =====
 买入条件（必须）:
 - J < 13
 - 当日短期趋势线 > 多空线
@@ -748,16 +871,8 @@ def run_backtest(data_dir,
 - MACD DIF > 0: +0.5分
 - RSI 14 > 28 > 57: +0.5分
 - -3.5% < 涨幅 < 2% 且缩量: +2分
-- K线跌幅绝对值 > 前一日涨跌幅且缩量: +1分
-- 当日跳空下跌: +1分
-- 收盘价 < 多空线: -3分
 - 前一日回踩趋势线且今日收盘价 > 趋势线且缩量阳线: +2分
-- 60日内最大成交量对应K线非阴线: -2分
-- 前一日回踩多空线且今日收盘价 > 多空线且缩量阳线: +2分
-- 多空线 <= 收盘价 <= 趋势线: +1分
 - 60日内存在倍量柱: +0.5分
-- 连续倍量柱: +2分
-- 60日内存在阳量后接2倍阴量: +1分
 
 ===== 止盈策略 =====
 1. J值第一次 > 100: 卖出20%仓位
@@ -771,7 +886,9 @@ def run_backtest(data_dir,
 1. 触发止损价 (买入K线最低价 * 0.93): 全部平仓
 2. 前一日多空线 < 趋势线，当日多空线 > 趋势线: 全部平仓
 3. 持仓期间出现60日内最高成交量的阴线: 全部平仓
-"""
+
+===== 风控策略 =====
+- 连续失败3次后，暂停交易2天"""
     
     result = f"""
 ===== B1 策略回测结果 =====
@@ -799,5 +916,5 @@ def run_backtest(data_dir,
 
 
 if __name__ == "__main__":
-    data_dir = "/Users/lidongyang/Desktop/Qstrategy/data/backtest_data"
+    data_dir = "/Users/lidongyang/Desktop/Qstrategy/data/forward_data"
     run_backtest(data_dir, min_score=0.5)
