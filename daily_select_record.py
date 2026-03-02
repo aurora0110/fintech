@@ -215,7 +215,7 @@ with tab2:
             stocks_str = ', '.join(current_stocks) if current_stocks else ''
             new_stocks = st.text_area(f"{strategy}大富翁代码 (用逗号分隔)", value=stocks_str, key=f"add_{strategy}")
 
-            stock_list = [s.strip() for s in new_stocks.split(',') if s.strip()]
+            stock_list = [s.strip() for s in new_stocks.split('\n') if s.strip()]
             config['records'][record_date][strategy] = stock_list
             st.divider()
 

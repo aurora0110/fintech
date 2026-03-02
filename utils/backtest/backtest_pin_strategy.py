@@ -3,6 +3,90 @@ import pandas as pd
 import numpy as np
 
 
+def check_data_anomaly(df):
+    anomaly_reasons = []
+    
+    if len(df) < 2:
+        return True, anomaly_reasons
+    
+    for i in range(len(df)):
+        row = df.iloc[i]
+        open_p = row['OPEN']
+        high = row['HIGH']
+        low = row['LOW']
+        close = row['CLOSE']
+        volume = row['VOLUME']
+        
+        if pd.isna(open_p) or pd.isna(high) or pd.isna(low) or pd.isna(close):
+            anomaly_reasons.append(f"{df.index[i]} 数据缺失")
+            continue
+        
+        if high == low == close:
+            anomaly_reasons.append(f"{df.index[i]} 一字板")
+            continue
+        
+        if i > 0:
+            prev_close = df.iloc[i-1]['CLOSE']
+            if prev_close > 0:
+                change_pct = (close - prev_close) / prev_close * 100
+                if change_pct > 20 or change_pct < -20:
+                    anomaly_reasons.append(f"{df.index[i]} 涨跌幅异常: {change_pct:.2f}%")
+                    continue
+        
+        if volume <= 0:
+            anomaly_reasons.append(f"{df.index[i]} 成交量为0")
+            continue
+        
+        if i >= 60:
+            rolling_vol = df.iloc[i-60:i]['VOLUME']
+            avg_vol = rolling_vol.mean()
+            if avg_vol > 0 and volume > avg_vol * 5:
+                anomaly_reasons.append(f"{df.index[i]} 成交量异常放大: {volume/avg_vol:.2f}倍")
+                continue
+        
+        if open_p < low or open_p > high:
+            anomaly_reasons.append(f"{df.index[i]} 开盘价不在高低区间")
+            continue
+        
+        if high > 0 and low > 0:
+            amplitude = (high - low) / low * 100
+            if i > 0:
+                prev_vol = df.iloc[i-1]['VOLUME']
+                vol_change = volume / prev_vol if prev_vol > 0 else 1
+                if amplitude > 15 and vol_change < 1.2:
+                    anomaly_reasons.append(f"{df.index[i]} 振幅异常但无放量")
+                    continue
+        
+        if i >= 1:
+            for j in range(1, min(6, i+1)):
+                if i - j >= 0:
+                    prev_change = (df.iloc[i-j]['CLOSE'] - df.iloc[i-j-1]['CLOSE']) / df.iloc[i-j-1]['CLOSE'] * 100
+                    if prev_change < -15:
+                        anomaly_reasons.append(f"{df.index[i]} 连续异常大跌")
+                        break
+    
+    if len(df) >= 2:
+        first_price = df.iloc[0]['CLOSE']
+        last_price = df.iloc[-1]['CLOSE']
+        if first_price > 0 and last_price > 0:
+            total_change = (last_price - first_price) / first_price
+            if abs(total_change) > 100:
+                anomaly_reasons.append("全历史价格比例变化异常")
+        
+        if last_price < 0.5:
+            anomaly_reasons.append("股价极低")
+        
+        if i >= 1:
+            avg_vol = df.iloc[:-1]['VOLUME'].mean()
+            if avg_vol > 0:
+                turnover = df.iloc[-1]['VOLUME'] * close
+                avg_turnover = avg_vol * first_price
+                if avg_turnover > 0 and turnover < avg_turnover * 0.001:
+                    anomaly_reasons.append("成交额过低")
+    
+    return len(anomaly_reasons) > 0, anomaly_reasons
+
+
 def tongdaxin_sma(series, n, m=1):
     result = np.zeros(len(series))
     prev_sma = 0
@@ -252,6 +336,7 @@ class BrickStrategyBacktest:
         self.initial_capital = 1000000
         self.data_cache = {}
         self.sell_at_open = True
+        self.yearly_returns = {}  # 🔥 每年收益率统计
     
     def load_stock_data(self, file_path):
         encodings = ['gbk', 'utf-8', 'latin-1', 'gb18030']
@@ -296,6 +381,14 @@ class BrickStrategyBacktest:
             return None
         
         df = df.sort_values('日期').reset_index(drop=True)
+        
+        if len(df) < 10:
+            return None
+        
+        is_anomaly, reasons = check_data_anomaly(df)
+        if is_anomaly:
+            return None
+        
         return df
     
     def run_strategy(self, df, stock_code, strategy_type):
@@ -721,6 +814,20 @@ class BrickStrategyBacktest:
         avg_profit_pct = sum(all_profit_pcts) / len(all_profit_pcts) if all_profit_pcts else 0
         max_profit_pct = max(all_profit_pcts) if all_profit_pcts else 0
         
+        # 🔥 每年收益率统计
+        yearly_profits = {}
+        for trade in completed_trades:
+            exit_date = trade.get('exit_date')
+            profit_pct = trade.get('profit_pct', 0)
+            if exit_date is not None and profit_pct is not None:
+                if isinstance(exit_date, str):
+                    year = int(exit_date[:4])
+                else:
+                    year = exit_date.year
+                if year not in yearly_profits:
+                    yearly_profits[year] = []
+                yearly_profits[year].append(profit_pct / 100)
+        
         cumulative_profit = capital / self.initial_capital
         
         first_date = df['日期'].iloc[0]
@@ -777,7 +884,8 @@ class BrickStrategyBacktest:
             'final_capital': capital,
             'avg_daily_trades': avg_daily_trades,
             'trades': trades,
-            'completed_trades': completed_trades
+            'completed_trades': completed_trades,
+            'yearly_returns': yearly_profits  # 🔥 每年收益率
         }
     
     def run(self, test_mode=False):
@@ -867,6 +975,27 @@ class BrickStrategyBacktest:
         print(f"最大连续失败次数: {max_consecutive_losses}")
         print(f"平均连续失败次数: {avg_consecutive_losses:.2f}")
         print(f"平均每天交易次数: {results_df['avg_daily_trades'].mean():.4f}")
+        
+        # 🔥 打印每年收益率分布
+        print("\n" + "=" * 50)
+        print("每年收益率分布")
+        print("=" * 50)
+        
+        # 汇总所有股票的 yearly_returns
+        all_yearly_returns = {}
+        for _, row in results_df.iterrows():
+            if 'yearly_returns' in row and isinstance(row['yearly_returns'], dict):
+                for year, returns in row['yearly_returns'].items():
+                    if year not in all_yearly_returns:
+                        all_yearly_returns[year] = []
+                    all_yearly_returns[year].extend(returns)
+        
+        for year in sorted(all_yearly_returns.keys()):
+            returns = all_yearly_returns[year]
+            if returns:
+                avg_return = np.mean(returns) * 100
+                win_rate = np.mean([r > 0 for r in returns]) * 100
+                print(f"{year}年: 交易次数={len(returns)}, 平均收益率={avg_return:.2f}%, 胜率={win_rate:.1f}%")
     
     def print_strategy_comparison(self):
         print(f"\n{'='*90}")
@@ -900,8 +1029,8 @@ class BrickStrategyBacktest:
 
 
 if __name__ == "__main__":
-    data_dir = r"c:\Users\lidon\Desktop\Qstrategy\data\20260207\normal"
-    results_file = r"c:\Users\lidon\Desktop\Qstrategy\backtest_brick_new_results.csv"
+    data_dir = "/Users/lidongyang/Desktop/Qstrategy/data/forward_data"
+    results_file = "/Users/lidongyang/Desktop/Qstrategy/backtest_brick_new_results.csv"
     
     backtest = BrickStrategyBacktest(data_dir, results_file)
     backtest.run(test_mode=False)

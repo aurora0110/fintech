@@ -25,6 +25,47 @@ def write_log(content):
         f.write(new_record + old)
 
 
+# ===========================
+# 涨跌幅限制
+# ===========================
+
+def is_chi_next_or_star(stock_code):
+    """判断是否为创业板或科创板股票"""
+    code = stock_code.upper()
+    if code.startswith("300") or code.startswith("688"):
+        return True
+    return False
+
+def limit_price_change(price, prev_price, stock_code, direction="both"):
+    """
+    限制涨跌幅
+    direction: "up"=涨停, "down"=跌停, "both"=双向限制
+    """
+    if prev_price <= 0 or price <= 0:
+        return price
+    
+    change_pct = (price - prev_price) / prev_price
+    
+    if is_chi_next_or_star(stock_code):
+        max_change = 0.20  # 创业板/科创板 20%
+    else:
+        max_change = 0.10  # 主板 10%
+    
+    if direction == "up":
+        max_change = max_change
+    elif direction == "down":
+        max_change = -max_change
+    else:
+        max_change = max_change
+    
+    if change_pct > max_change:
+        return prev_price * (1 + max_change)
+    elif change_pct < -max_change:
+        return prev_price * (1 - max_change)
+    
+    return price
+
+
 def check_data_anomaly(df):
     anomaly_dates = set()
     
@@ -860,6 +901,44 @@ def run_backtest(data_dir,
             avg_ret = np.mean(returns) * 100
             win_rate = np.mean([r > 0 for r in returns]) * 100
             print(f"{year}年: 交易次数={len(returns)}, 平均收益率={avg_ret:.2f}%, 胜率={win_rate:.1f}%")
+    
+    print("\n" + "=" * 50)
+    print("持有期间收益率分布统计")
+    print("=" * 50)
+    
+    all_trade_returns = []
+    for year_returns in yearly_returns.values():
+        all_trade_returns.extend(year_returns)
+    
+    if all_trade_returns:
+        returns_arr = np.array(all_trade_returns)
+        returns_pct = returns_arr * 100
+        
+        bins = [(-200, -10), (-10, -5), (-5, -2), (-2, 0), (0, 2), (2, 5), (5, 10), (10, 200)]
+        print(f"{'收益率区间':<15} {'交易次数':<10} {'占比':<10}")
+        print("-" * 35)
+        for low, high in bins:
+            count = np.sum((returns_pct >= low) & (returns_pct < high))
+            pct = count / len(returns_pct) * 100 if len(returns_pct) > 0 else 0
+            print(f"[{low:>5}%, {high:<5}%)    {count:<10} {pct:.2f}%")
+        
+        median_return = np.median(returns_arr) * 100
+        print(f"\n收益率中位数: {median_return:.2f}%")
+        print(f"平均收益率: {np.mean(returns_arr) * 100:.2f}%")
+        
+        if len(returns_arr) >= 2:
+            returns_sorted = np.sort(returns_arr)
+            print(f"25分位数: {returns_sorted[len(returns_arr)//4] * 100:.2f}%")
+            print(f"75分位数: {returns_sorted[len(returns_arr)*3//4] * 100:.2f}%")
+        
+        var_95 = np.percentile(returns_arr, 5) * 100
+        cvar_95 = returns_arr[returns_arr <= np.percentile(returns_arr, 5)].mean() * 100
+        print(f"VaR(95%): {var_95:.2f}%")
+        print(f"CVaR(95%): {cvar_95:.2f}%")
+        
+        print(f"\n最大盈利: {returns_arr.max() * 100:.2f}%")
+        print(f"最大亏损: {returns_arr.min() * 100:.2f}%")
+        print(f"收益标准差: {returns_arr.std() * 100:.2f}%")
     
     strategy_desc = """
 ===== B1 评分系统 (精简版 - 5个核心因子) =====

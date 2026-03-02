@@ -1,0 +1,114 @@
+{
+  "data_path": "/Users/lidongyang/Desktop/Qstrategy/data/forward_data",
+  "output_dir": "utils/TMS-alpha/output",
+  "date_col": "date",
+  "code_col": "code",
+  "close_col": "close",
+  "next_return_col": "next_return",
+  "board_col": "board",
+  "name_col": "name",
+  "st_flag_col": "is_st",
+  "exclude_boards": ["科创", "STAR"],
+  "top_k_pct": 0.1,
+  "min_holdings": 10,
+  "cost_rate": 0.001,
+  "slippage_rate": 0.0005,
+  "risk_free_rate": 0.0,
+  "normalize_method": "rank",
+  "objective_name": "composite",
+  "objective_weights": {
+    "sharpe": 1.0,
+    "calmar": 0.5,
+    "max_drawdown": -0.3
+  },
+  "walk_forward": {
+    "train_years": 3,
+    "test_years": 1,
+    "step_years": 1
+  },
+  "corr_drop_threshold": 0.7,
+  "random_weight_samples": 5000,
+  "random_seed": 42,
+  "threshold_params": {
+    "j_threshold": {
+      "grid": [80, 85, 90, 95, 100, 105]
+    },
+    "fixed_stop_loss": {
+      "grid": [0.02, 0.03, 0.04, 0.05, 0.06]
+    },
+    "atr_stop_mult": {
+      "grid": [1.0, 1.5, 2.0, 2.5]
+    },
+    "fixed_take_profit": {
+      "grid": [0.03, 0.05, 0.08]
+    },
+    "trend_deviation_take_profit": {
+      "grid": [0.10, 0.15, 0.20, 0.25]
+    }
+  },
+  "sensitivity_ranges": {
+    "j_threshold": 5,
+    "fixed_stop_loss": 0.01,
+    "fixed_take_profit": 0.05,
+    "trend_deviation_take_profit": 0.05
+  },
+  "factors": [
+    {
+      "name": "j",
+      "category": "momentum",
+      "kind": "continuous",
+      "direction": "lower_better",
+      "comparator": "<=",
+      "default_weight": 0.2,
+      "grid": [80, 85, 90, 95, 100, 105]
+    },
+    {
+      "name": "rsi",
+      "category": "momentum",
+      "kind": "continuous",
+      "direction": "lower_better",
+      "default_weight": 0.2,
+      "grid": []
+    },
+    {
+      "name": "macd",
+      "category": "momentum",
+      "kind": "continuous",
+      "direction": "higher_better",
+      "default_weight": 0.2,
+      "grid": []
+    },
+    {
+      "name": "k",
+      "category": "momentum",
+      "kind": "continuous",
+      "direction": "lower_better",
+      "default_weight": 0.1,
+      "grid": []
+    },
+    {
+      "name": "vol_ratio",
+      "category": "volume",
+      "kind": "continuous",
+      "direction": "higher_better",
+      "default_weight": 0.1,
+      "grid": []
+    },
+    {
+      "name": "pct_change",
+      "category": "momentum",
+      "kind": "continuous",
+      "direction": "higher_better",
+      "default_weight": 0.1,
+      "grid": []
+    },
+    {
+      "name": "price_position",
+      "category": "momentum",
+      "kind": "continuous",
+      "direction": "lower_better",
+      "default_weight": 0.1,
+      "grid": []
+    }
+  ]
+}

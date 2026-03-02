@@ -4,622 +4,593 @@ import numpy as np
 from datetime import datetime
 
 
-def log_backtest_result(script_name, results_summary, buy_conditions, sell_conditions, stop_loss, data_path, method):
-    results_dir = "/Users/lidongyang/Desktop/Qstrategy/results"
-    os.makedirs(results_dir, exist_ok=True)
+# ================= 涨跌幅限制 =================
 
-    backtest_folder = os.path.join(results_dir, "backtest")
-    os.makedirs(backtest_folder, exist_ok=True)
+def is_chi_next_or_star(stock_code):
+    """判断是否为创业板或科创板股票"""
+    code = stock_code.upper()
+    if code.startswith("300") or code.startswith("688"):
+        return True
+    return False
 
-    txt_file = os.path.join(backtest_folder, f"{script_name}.txt")
+def limit_price_change(price, prev_price, stock_code, direction="both"):
+    """
+    限制涨跌幅
+    direction: "up"=涨停, "down"=跌停, "both"=双向限制
+    """
+    if prev_price <= 0 or price <= 0:
+        return price
+    
+    change_pct = (price - prev_price) / prev_price
+    
+    if is_chi_next_or_star(stock_code):
+        max_change = 0.20  # 创业板/科创板 20%
+    else:
+        max_change = 0.10  # 主板 10%
+    
+    if direction == "up":
+        max_change = max_change
+    elif direction == "down":
+        max_change = -max_change
+    else:
+        max_change = max_change
+    
+    if change_pct > max_change:
+        return prev_price * (1 + max_change)
+    elif change_pct < -max_change:
+        return prev_price * (1 - max_change)
+    
+    return price
+
+
+# ================= 日志系统 =================
+
+def write_log(content):
+
+    script_path = os.path.abspath(__file__)
+    script_dir = os.path.dirname(script_path)
+    script_name = os.path.splitext(os.path.basename(script_path))[0]
+    log_file = os.path.join(script_dir, script_name + ".txt")
 
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    new_record = f"\n========== {timestamp} ==========\n"
+    new_record += content + "\n\n"
 
-    log_content = f"""
-{'='*80}
-记录时间: {timestamp}
-{'='*80}
+    if os.path.exists(log_file):
+        with open(log_file, "r", encoding="utf-8") as f:
+            old = f.read()
+    else:
+        old = ""
 
-【买入条件】
-{buy_conditions}
-
-【卖出策略】
-{sell_conditions}
-
-【止损条件】
-{stop_loss}
-
-【回测数据路径】
-{data_path}
-
-【回测方法】
-{method}
-
-【回测结果】
-{results_summary}
-
-"""
-
-    with open(txt_file, 'a', encoding='utf-8') as f:
-        f.write(log_content)
-
-    print(f"回测结果已记录到: {txt_file}")
+    with open(log_file, "w", encoding="utf-8") as f:
+        f.write(new_record + old)
 
 
-def calculate_trend_vectorized(df, M1=14, M2=28, M3=57, M4=114):
-    df['知行短期趋势线'] = df['CLOSE'].ewm(span=10, adjust=False).mean()
-    df['知行短期趋势线'] = df['知行短期趋势线'].ewm(span=10, adjust=False).mean()
+# ================= 数据加载 =================
 
-    df['MA14'] = df['CLOSE'].rolling(window=M1, min_periods=1).mean()
-    df['MA28'] = df['CLOSE'].rolling(window=M2, min_periods=1).mean()
-    df['MA57'] = df['CLOSE'].rolling(window=M3, min_periods=1).mean()
-    df['MA114'] = df['CLOSE'].rolling(window=M4, min_periods=1).mean()
-    df['知行多空线'] = (df['MA14'] + df['MA28'] + df['MA57'] + df['MA114']) / 4
+def check_data_anomaly(df):
+    anomaly_reasons = []
+    
+    if len(df) < 2:
+        return True, anomaly_reasons
+    
+    for i in range(len(df)):
+        row = df.iloc[i]
+        open_p = row['OPEN']
+        high = row['HIGH']
+        low = row['LOW']
+        close = row['CLOSE']
+        volume = row['VOLUME']
+        
+        if pd.isna(open_p) or pd.isna(high) or pd.isna(low) or pd.isna(close):
+            anomaly_reasons.append(f"{df.index[i]} 数据缺失")
+            continue
+        
+        if high == low == close:
+            anomaly_reasons.append(f"{df.index[i]} 一字板")
+            continue
+        
+        if i > 0:
+            prev_close = df.iloc[i-1]['CLOSE']
+            if prev_close > 0:
+                change_pct = (close - prev_close) / prev_close * 100
+                if change_pct > 20 or change_pct < -20:
+                    anomaly_reasons.append(f"{df.index[i]} 涨跌幅异常: {change_pct:.2f}%")
+                    continue
+        
+        if volume <= 0:
+            anomaly_reasons.append(f"{df.index[i]} 成交量为0")
+            continue
+        
+        if i >= 60:
+            rolling_vol = df.iloc[i-60:i]['VOLUME']
+            avg_vol = rolling_vol.mean()
+            if avg_vol > 0 and volume > avg_vol * 5:
+                anomaly_reasons.append(f"{df.index[i]} 成交量异常放大: {volume/avg_vol:.2f}倍")
+                continue
+        
+        if open_p < low or open_p > high:
+            anomaly_reasons.append(f"{df.index[i]} 开盘价不在高低区间")
+            continue
+        
+        if high > 0 and low > 0:
+            amplitude = (high - low) / low * 100
+            if i > 0:
+                prev_vol = df.iloc[i-1]['VOLUME']
+                vol_change = volume / prev_vol if prev_vol > 0 else 1
+                if amplitude > 15 and vol_change < 1.2:
+                    anomaly_reasons.append(f"{df.index[i]} 振幅异常但无放量")
+                    continue
+        
+        if i >= 1:
+            for j in range(1, min(6, i+1)):
+                if i - j >= 0:
+                    prev_change = (df.iloc[i-j]['CLOSE'] - df.iloc[i-j-1]['CLOSE']) / df.iloc[i-j-1]['CLOSE'] * 100
+                    if prev_change < -15:
+                        anomaly_reasons.append(f"{df.index[i]} 连续异常大跌")
+                        break
+    
+    if len(df) >= 2:
+        first_price = df.iloc[0]['CLOSE']
+        last_price = df.iloc[-1]['CLOSE']
+        if first_price > 0 and last_price > 0:
+            total_change = (last_price - first_price) / first_price
+            if abs(total_change) > 100:
+                anomaly_reasons.append("全历史价格比例变化异常")
+        
+        if last_price < 0.5:
+            anomaly_reasons.append("股价极低")
+        
+        if i >= 1:
+            avg_vol = df.iloc[:-1]['VOLUME'].mean()
+            if avg_vol > 0:
+                turnover = df.iloc[-1]['VOLUME'] * close
+                avg_turnover = avg_vol * first_price
+                if avg_turnover > 0 and turnover < avg_turnover * 0.001:
+                    anomaly_reasons.append("成交额过低")
+    
+    return len(anomaly_reasons) > 0, anomaly_reasons
 
-    return df
+
+def load_stock(path):
+    try:
+        df = pd.read_csv(
+            path,
+            sep=r"\s+",
+            engine="python",
+            header=1,
+            encoding="gbk"
+        )
+        df.columns = ["日期", "OPEN", "HIGH", "LOW", "CLOSE", "VOLUME", "成交额"][:len(df.columns)]
+        df = df[["日期", "OPEN", "HIGH", "LOW", "CLOSE", "VOLUME"]]
+        df = df[pd.to_numeric(df["OPEN"], errors="coerce").notna()]
+        df["日期"] = pd.to_datetime(df["日期"])
+        df = df.sort_values("日期")
+        df.set_index("日期", inplace=True)
+        df = df[~df.index.duplicated(keep='first')]
+        
+        is_anomaly, reasons = check_data_anomaly(df)
+        if is_anomaly:
+            return None
+        
+        return df
+    except Exception as e:
+        print(f"加载失败 {path}: {e}")
+        return None
 
 
-def calculate_kdj_vectorized(df, N=9, M1=3, M2=3):
-    df['HHV9'] = df['HIGH'].rolling(window=N, min_periods=1).max()
-    df['LLV9'] = df['LOW'].rolling(window=N, min_periods=1).min()
+# ================= 技术指标（不改） =================
+
+def calculate_indicators(df):
+
+    df['知行短期趋势线'] = df['CLOSE'].ewm(span=10).mean()
+    df['知行短期趋势线'] = df['知行短期趋势线'].ewm(span=10).mean()
+
+    df['MA14'] = df['CLOSE'].rolling(14).mean()
+    df['MA28'] = df['CLOSE'].rolling(28).mean()
+    df['MA57'] = df['CLOSE'].rolling(57).mean()
+    df['MA114'] = df['CLOSE'].rolling(114).mean()
+
+    df['知行多空线'] = (
+        df['MA14'] + df['MA28'] +
+        df['MA57'] + df['MA114']
+    ) / 4
+
+    df['HHV9'] = df['HIGH'].rolling(9).max()
+    df['LLV9'] = df['LOW'].rolling(9).min()
 
     rng = df['HHV9'] - df['LLV9']
-    rng = rng.replace(0, np.nan)
-
     df['RSV'] = (df['CLOSE'] - df['LLV9']) / rng * 100
     df['RSV'] = df['RSV'].fillna(50)
 
-    df['K'] = df['RSV'].ewm(alpha=1/M1, adjust=False, min_periods=1).mean()
-    df['D'] = df['K'].ewm(alpha=1/M2, adjust=False, min_periods=1).mean()
+    df['K'] = df['RSV'].ewm(alpha=1/3).mean()
+    df['D'] = df['K'].ewm(alpha=1/3).mean()
     df['J'] = 3 * df['K'] - 2 * df['D']
-
-    df['K'] = df['K'].fillna(50)
-    df['D'] = df['D'].fillna(50)
-    df['J'] = df['J'].fillna(50)
 
     return df
 
 
-def precompute_b2_signals(df):
-    if len(df) < 4:
-        return pd.Series([False] * len(df)), pd.Series([0.0] * len(df))
+def generate_signal(df, volume_multiplier):
 
-    df_calc = df[['日期', 'OPEN', 'HIGH', 'LOW', 'CLOSE', 'VOLUME']].copy()
+    trend_ok = df['知行多空线'] <= df['知行短期趋势线']
+    j_ok = (df['J'].shift(1) <= 20) & (df['J'] <= 50)
+    volatility_ok = (df['CLOSE'] / df['CLOSE'].shift(1) - 1) * 100 >= 4
+    # 修改：成交量条件从放大2倍改为相较前一天放量即可（> 1）
+    volume_ok = df['VOLUME'] > df['VOLUME'].shift(1) * volume_multiplier
+    # 当 volume_multiplier = 1.0 时，只要放量即可（不要求具体倍数）
+    if volume_multiplier <= 1.0:
+        volume_ok = df['VOLUME'] > df['VOLUME'].shift(1)
+    bullish_ok = df['CLOSE'] > df['OPEN']
 
-    df_calc = calculate_trend_vectorized(df_calc)
-    df_calc = calculate_kdj_vectorized(df_calc)
-
-    trend_ok = df_calc['知行多空线'] <= df_calc['知行短期趋势线']
-
-    j_yesterday = df_calc['J'].shift(1)
-    j_today = df_calc['J']
-    j_ok = (j_yesterday <= 50) & (j_today <= 80)
-
-    close_yesterday = df_calc['CLOSE'].shift(1)
-    close_yesterday = close_yesterday.replace(0, np.nan)
-    change_pct = ((df_calc['CLOSE'] - close_yesterday) / close_yesterday * 100).fillna(0)
-    volatility_ok = change_pct >= 4
-
-    volume_yesterday = df_calc['VOLUME'].shift(1)
-    volume_ok = df_calc['VOLUME'] > volume_yesterday
-
-    volume_3x_ok = df_calc['VOLUME'] > volume_yesterday * 3
-
-    high_col = df_calc['HIGH']
-    open_col = df_calc['OPEN']
-    close_col = df_calc['CLOSE']
-
-    length = (high_col - open_col).abs()
-    shadow_length = high_col - close_col
-
-    with np.errstate(divide='ignore', invalid='ignore'):
-        shadow_ratio = np.where(length > 0, shadow_length / length, 0)
+    entity = (df['CLOSE'] - df['OPEN']).abs()
+    upper_shadow = df['HIGH'] - np.maximum(df['OPEN'], df['CLOSE'])
+    shadow_ratio = np.where(entity > 0, upper_shadow / entity, 0)
     shadow_ok = shadow_ratio < 0.3
 
-    b2_signal = trend_ok & j_ok & volatility_ok & volume_ok & volume_3x_ok & shadow_ok
+    return (
+        trend_ok & j_ok & volatility_ok &
+        volume_ok & bullish_ok & shadow_ok
+    ).fillna(False)
 
-    stop_loss_prices = df_calc['LOW'].copy()
 
-    return b2_signal.fillna(False), stop_loss_prices.fillna(0)
+# ================= 主回测 =================
 
+def run_backtest(data_dir,
+                 volume_multiplier=2.0,
+                 profit_target=8,
+                 stop_loss=2,
+                 initial_capital=1_000_000,
+                 max_positions=4,
+                 volume_strategy="60day_all",
+                 rolling_window=60,
+                 volume_ratio=2.0,
+                 top_n=1):
 
-class B2StrategyBacktest:
-    def __init__(self, data_dir, results_file=None):
-        self.data_dir = data_dir
-        self.results_file = results_file
-        self.results = []
-        self.initial_capital = 1000000
-        self.data_cache = {}
+    commission = 0.0005
+    stamp = 0.001
 
-    def load_stock_data(self, file_path):
-        encodings = ['gbk', 'utf-8', 'latin-1', 'gb18030']
-        df = None
+    stock_data = {}
+    daily_signals = {}
 
-        for encoding in encodings:
-            try:
-                with open(file_path, 'r', encoding=encoding) as f:
-                    lines = f.readlines()
+    # 🔥 新增风控状态
+    loss_streak = {}
+    cooldown_flag = {}
+    cooldown_count = {}  # 修复冷却机制：记录剩余冷却次数
+    
+    # 🔥 每年收益率统计
+    yearly_returns = {}  # {年份: [交易收益率列表]}
 
-                data = []
-                for i, line in enumerate(lines):
-                    line = line.strip()
-                    if not line:
-                        continue
-                    if i == 0 and '开盘' in line:
-                        continue
-                    parts = line.split()
-                    if len(parts) >= 6:
-                        try:
-                            date_str = parts[0]
-                            open_price = float(parts[1])
-                            high_price = float(parts[2])
-                            low_price = float(parts[3])
-                            close_price = float(parts[4])
-                            volume = float(parts[5])
+    files = [f for f in os.listdir(data_dir) if f.endswith(".txt")]
+    total = len(files)
 
-                            data.append([date_str, open_price, high_price, low_price, close_price, volume])
-                        except ValueError:
-                            continue
+    for idx, file in enumerate(files, 1):
 
-                df = pd.DataFrame(data, columns=['日期', 'OPEN', 'HIGH', 'LOW', 'CLOSE', 'VOLUME'])
-                df['日期'] = pd.to_datetime(df['日期'])
-                break
-            except (UnicodeDecodeError, LookupError):
+        print(f"[股票加载 {idx}/{total}] {file}")
+
+        df = load_stock(os.path.join(data_dir, file))
+        if df is None or len(df) < 130:
+            print(f"  跳过：数据不足或加载失败，行数={len(df) if df is not None else 0}")
+            continue
+
+        df = calculate_indicators(df)
+        df["signal"] = generate_signal(df, volume_multiplier)
+        
+        signal_count = df["signal"].sum()
+        if signal_count > 0:
+            print(f"  信号数={signal_count}, 数据行数={len(df)}")
+
+        stock_data[file] = df
+        loss_streak[file] = 0
+        cooldown_flag[file] = False
+        cooldown_count[file] = 0  # 初始化冷却次数
+
+        for date in df.index[df["signal"]]:
+            daily_signals.setdefault(date, []).append(file)
+
+    all_dates = sorted(set().union(*[df.index for df in stock_data.values()]))
+
+    cash = initial_capital
+    positions = []
+    equity_curve = []
+    
+    # 修复资金分配：按当前现金动态分配，而非初始资金
+    # 每次开仓时使用当前可用现金 / 剩余仓位数
+
+    for current_date in all_dates:
+
+        new_positions = []
+
+        # ===== 处理持仓 =====
+        for pos in positions:
+
+            df = stock_data[pos["stock"]]
+
+            if current_date not in df.index:
+                new_positions.append(pos)
                 continue
-            except Exception as e:
-                print(f"加载文件 {file_path} 失败: {str(e)}")
-                return None
 
-        return df
+            row = df.loc[current_date]
 
-    def precompute_stock_signals(self, df):
-        b2_signals, stop_loss_prices = precompute_b2_signals(df)
+            open_p = row["OPEN"]
+            high = row["HIGH"]
+            low = row["LOW"]
+            close = row["CLOSE"]
 
-        df_signals = pd.DataFrame({
-            'b2_signal': b2_signals,
-            'stop_loss_price': stop_loss_prices
-        })
+            exit_flag = False
+            stop_triggered = False
 
-        return df_signals
+            idx = df.index.get_loc(current_date)
+            
+            # 止盈条件（修复未来函数：用前一日成交量判断，次日开盘卖出）
+            if idx >= rolling_window:
+                volume_exit = False
+                
+                # 策略 1：滚动窗口 + 阴量/阳量比例
+                if volume_strategy == "rolling_ratio":
+                    if idx >= rolling_window:
+                        prev_volume = df.iloc[idx - 1]["VOLUME"]
+                        rolling_volumes = df.iloc[idx - rolling_window:idx]["VOLUME"]
+                        if close < open_p:  # 阴量
+                            ratio = prev_volume / rolling_volumes.mean()
+                            if ratio >= volume_ratio:
+                                volume_exit = True
+                
+                # 策略 2：当日成交量为 rolling_window 日内最高 + 阴量
+                elif volume_strategy == "60day_max":
+                    prev_volume = df.iloc[idx - 1]["VOLUME"]
+                    rolling_max = df.iloc[idx - rolling_window:idx]["VOLUME"].max()
+                    if prev_volume >= rolling_max and close < open_p:
+                        volume_exit = True
+                
+                # 策略 3：当日成交量为 rolling_window 日内前 top_n 高 + 阴量
+                elif volume_strategy == "60day_topn":
+                    prev_volume = df.iloc[idx - 1]["VOLUME"]
+                    rolling_volumes = df.iloc[idx - rolling_window:idx]["VOLUME"].sort_values(ascending=False)
+                    if len(rolling_volumes) >= top_n:
+                        threshold = rolling_volumes.iloc[top_n - 1]
+                        if prev_volume >= threshold and close < open_p:
+                            volume_exit = True
+                
+                # 原始策略：当日成交量高于全部 + 阴量（用前一日数据）
+                elif volume_strategy == "60day_all":
+                    prev_volume = df.iloc[idx - 1]["VOLUME"]
+                    rolling_max = df.iloc[idx - rolling_window:idx]["VOLUME"].max()
+                    if prev_volume > rolling_max and close < open_p:
+                        volume_exit = True
+                
+                if volume_exit:
+                    # 修复未来函数：标记为需要止盈，次日开盘卖出
+                    pos["volume_exit_flag"] = True
 
-    def run_strategy(self, df, stock_code, strategy_type):
-        if len(df) < 130:
-            return self.calculate_metrics([], stock_code, strategy_type)
+            # 修复未来函数：成交量止盈信号次日开盘卖出
+            if pos.get("volume_exit_flag", False):
+                exit_price = open_p
+                exit_flag = True
 
-        df_signals = self.precompute_stock_signals(df)
+            # 固定止盈：8% 止盈
+            if not exit_flag:
+                target_price = pos["entry_price"] * (1 + profit_target/100)
+                if open_p >= target_price:
+                    exit_price = open_p
+                    exit_flag = True
+                elif high >= target_price:
+                    exit_price = target_price
+                    exit_flag = True
 
-        trades = []
-        position = None
+            # 固定止损：4% 止损（处理跳空：开盘价低于止损价时按开盘价卖出）
+            if not exit_flag:
+                stop_price_fixed = pos["entry_price"] * (1 - stop_loss/100)
+                if open_p <= stop_price_fixed:
+                    exit_price = open_p
+                    exit_flag = True
+                    stop_triggered = True
+                elif low <= stop_price_fixed:
+                    exit_price = stop_price_fixed
+                    exit_flag = True
+                    stop_triggered = True
 
-        start_idx = 120
-        end_idx = len(df) - 6
-
-        for i in range(start_idx, end_idx):
-            if position is None:
-                for j in range(i, min(i + 6, len(df) - 1)):
-                    if df_signals.iloc[j]['b2_signal']:
-                        signal_low = df_signals.iloc[j]['stop_loss_price']
-
-                        buy_date = df.iloc[j + 1]['日期']
-                        buy_price = df.iloc[j + 1]['OPEN']
-
-                        position = {
-                            'entry_date': buy_date,
-                            'entry_price': buy_price,
-                            'stop_loss_price': signal_low,
-                            'buy_idx': j + 1,
-                            'holding_days': 0,
-                            'sold': False
-                        }
-                        break
-
-            if position and not position['sold']:
-                buy_idx = position['buy_idx']
-
-                for hold_day in range(1, 6):
-                    current_idx = buy_idx + hold_day
-                    if current_idx >= len(df):
-                        break
-
-                    current_data = df.iloc[current_idx]
-
-                    if hold_day == position['holding_days'] + 1:
-                        position['holding_days'] = hold_day
-
-                    entry_price = position['entry_price']
-
-                    high_slice = df.iloc[buy_idx:current_idx + 1]['HIGH']
-                    high_price = high_slice.max() if len(high_slice) > 0 else current_data['HIGH']
-
-                    current_close = current_data['CLOSE']
-                    current_open = current_data['OPEN']
-
-                    max_rise = (high_price - entry_price) / entry_price * 100
-
-                    should_sell = False
-                    sell_reason = ''
-                    exit_price = 0
-
-                    profit_target = 0
-                    if '3%止盈' in strategy_type:
-                        profit_target = 3
-                    elif '4%止盈' in strategy_type:
-                        profit_target = 4
-                    elif '5%止盈' in strategy_type:
-                        profit_target = 5
-                    elif '6%止盈' in strategy_type:
-                        profit_target = 6
-                    elif '7%止盈' in strategy_type:
-                        profit_target = 7
-                    elif '8%止盈' in strategy_type:
-                        profit_target = 8
-                    elif '9%止盈' in strategy_type:
-                        profit_target = 9
-
-                    if profit_target > 0 and max_rise >= profit_target:
-                        should_sell = True
-                        sell_reason = f'{profit_target}%止盈'
-                        exit_price = current_close
-
-                    if current_close <= position['stop_loss_price']:
-                        should_sell = True
-                        sell_reason = '止损'
-                        exit_price = current_close
-
-                    if strategy_type == '2天收盘卖' and hold_day == 1 and not should_sell:
-                        should_sell = True
-                        sell_reason = '2天收盘卖'
-                        exit_price = current_close
-
-                    if strategy_type == '2天开盘卖' and hold_day == 1 and not should_sell:
-                        should_sell = True
-                        sell_reason = '2天开盘卖'
-                        exit_price = current_open
-
-                    if strategy_type == '3天收盘卖' and hold_day == 2 and not should_sell:
-                        should_sell = True
-                        sell_reason = '3天收盘卖'
-                        exit_price = current_close
-
-                    if strategy_type == '3天开盘卖' and hold_day == 2 and not should_sell:
-                        should_sell = True
-                        sell_reason = '3天开盘卖'
-                        exit_price = current_open
-
-                    if strategy_type == '4天收盘卖' and hold_day == 3 and not should_sell:
-                        should_sell = True
-                        sell_reason = '4天收盘卖'
-                        exit_price = current_close
-
-                    if strategy_type == '4天开盘卖' and hold_day == 3 and not should_sell:
-                        should_sell = True
-                        sell_reason = '4天开盘卖'
-                        exit_price = current_open
-
-                    if strategy_type == '5天收盘卖' and hold_day == 4 and not should_sell:
-                        should_sell = True
-                        sell_reason = '5天收盘卖'
-                        exit_price = current_close
-
-                    if strategy_type == '5天开盘卖' and hold_day == 4 and not should_sell:
-                        should_sell = True
-                        sell_reason = '5天开盘卖'
-                        exit_price = current_open
-
-                    if strategy_type == '6天收盘卖' and hold_day == 5 and not should_sell:
-                        should_sell = True
-                        sell_reason = '6天收盘卖'
-                        exit_price = current_close
-
-                    if strategy_type == '6天开盘卖' and hold_day == 5 and not should_sell:
-                        should_sell = True
-                        sell_reason = '6天开盘卖'
-                        exit_price = current_open
-
-                    if should_sell:
-                        profit = (exit_price - entry_price) / entry_price
-                        holding_time = (current_data['日期'] - position['entry_date']).days
-                        trades.append({
-                            'stock_code': stock_code,
-                            'entry_date': position['entry_date'],
-                            'entry_price': entry_price,
-                            'exit_date': current_data['日期'],
-                            'exit_price': exit_price,
-                            'profit': profit,
-                            'holding_days': holding_time,
-                            'reason': sell_reason
-                        })
-                        position = None
-                        break
-
-        return self.calculate_metrics(trades, stock_code, strategy_type)
-
-    def calculate_metrics(self, trades, stock_code, strategy_type):
-        if not trades:
-            return {
-                'stock_code': stock_code,
-                'strategy': strategy_type,
-                'num_trades': 0,
-                'total_profit': 0,
-                'success_rate': 0,
-                'annual_return': 0,
-                'max_drawdown': 0,
-                'avg_drawdown': 0,
-                'max_consecutive_losses': 0,
-                'avg_consecutive_losses': 0,
-                'sharpe_ratio': 0,
-                'avg_daily_trades': 0,
-                'turnover_rate': 0,
-                'avg_holding_time': 0,
-                'trade_density': 0,
-                'trades': []
-            }
-
-        trades_df = pd.DataFrame(trades)
-        num_trades = len(trades_df)
-        total_profit = trades_df['profit'].sum()
-        success_rate = len(trades_df[trades_df['profit'] > 0]) / num_trades if num_trades > 0 else 0
-
-        if num_trades > 1:
-            cumulative_profit = (1 + trades_df['profit']).cumprod()
-            running_max = cumulative_profit.expanding().max()
-            drawdowns = (cumulative_profit - running_max) / running_max
-            max_drawdown = drawdowns.min() * 100
-            avg_drawdown = drawdowns.mean() * 100
-        else:
-            max_drawdown = 0
-            avg_drawdown = 0
-
-        consecutive_losses = 0
-        max_consecutive_losses = 0
-        for profit in trades_df['profit']:
-            if profit <= 0:
-                consecutive_losses += 1
-                max_consecutive_losses = max(max_consecutive_losses, consecutive_losses)
-            else:
-                consecutive_losses = 0
-
-        avg_consecutive_losses = max_consecutive_losses / num_trades if num_trades > 0 else 0
-
-        first_date = trades_df['entry_date'].min()
-        last_date = trades_df['exit_date'].max()
-        days = (last_date - first_date).days if last_date > first_date else 1
-        trading_days = min(days, 252)
-        avg_daily_trades = num_trades / trading_days if trading_days > 0 else num_trades
-
-        avg_profit_pct = trades_df['profit'].mean() * 100 if num_trades > 0 else 0
-        annual_return = avg_profit_pct * avg_daily_trades * 252 if trading_days > 0 else 0
-
-        returns = trades_df['profit'].values
-        if len(returns) > 1 and np.std(returns) > 0:
-            sharpe_ratio = (np.mean(returns) / np.std(returns)) * np.sqrt(252)
-        else:
-            sharpe_ratio = 0
-
-        avg_holding_time = trades_df['holding_days'].mean() if 'holding_days' in trades_df.columns else 0
-
-        total_invested = trades_df['entry_price'].sum()
-        turnover_rate = (total_invested / self.initial_capital) * 100 if total_invested > 0 else 0
-
-        trade_density = num_trades / trading_days if trading_days > 0 else 0
-
-        return {
-            'stock_code': stock_code,
-            'strategy': strategy_type,
-            'num_trades': num_trades,
-            'total_profit': total_profit,
-            'success_rate': success_rate,
-            'annual_return': annual_return,
-            'max_drawdown': max_drawdown,
-            'avg_drawdown': avg_drawdown,
-            'max_consecutive_losses': max_consecutive_losses,
-            'avg_consecutive_losses': avg_consecutive_losses,
-            'sharpe_ratio': sharpe_ratio,
-            'avg_daily_trades': avg_daily_trades,
-            'turnover_rate': turnover_rate,
-            'avg_holding_time': avg_holding_time,
-            'trade_density': trade_density,
-            'trades': trades
-        }
-
-    def run(self, test_mode=False):
-        stock_files = [f for f in os.listdir(self.data_dir) if f.endswith('.txt')]
-        print(f"找到 {len(stock_files)} 个股票文件")
-
-        if test_mode:
-            print("测试模式：只运行前10个股票")
-            stock_files = stock_files[:10]
-
-        strategy_types = [
-            '2天收盘卖', '2天开盘卖',
-            '3天收盘卖', '3天开盘卖',
-            '4天收盘卖', '4天开盘卖',
-            '5天收盘卖', '5天开盘卖',
-            '6天收盘卖', '6天开盘卖',
-            '3%止盈', '4%止盈', '5%止盈', '6%止盈', '7%止盈', '8%止盈', '9%止盈'
-        ]
-
-        total_strategies = len(strategy_types)
-        print(f"预计总计算量: {len(stock_files)} × {total_strategies} 种策略")
-        print("开始运行回测...")
-
-        all_results = []
-
-        for strategy_type in strategy_types:
-            print(f"\n{'='*60}")
-            print(f"运行策略: {strategy_type}")
-            print(f"{'='*60}")
-
-            self.results = []
-
-            for i, file_name in enumerate(stock_files):
-                if i % 100 == 0:
-                    print(f"处理进度: {i}/{len(stock_files)}")
-
-                stock_code = file_name.split('#')[-1].replace('.txt', '')
-
-                file_path = os.path.join(self.data_dir, file_name)
-                if file_name in self.data_cache:
-                    df = self.data_cache[file_name]
+            # B2 信号日最低价止损（仅当固定止损未触发时）
+            # 止损价改为买入日的最低价，跳空低开以当天收盘价卖出
+            if not exit_flag and low < pos["stop_price"]:
+                # 跳空低开：按收盘价卖出（更保守）
+                if open_p < pos["stop_price"]:
+                    exit_price = close
                 else:
-                    df = self.load_stock_data(file_path)
-                    if df is not None:
-                        self.data_cache[file_name] = df
+                    exit_price = pos["stop_price"]
+                exit_flag = True
+                stop_triggered = True
 
-                if df is not None and len(df) > 120:
-                    result = self.run_strategy(df, stock_code, strategy_type)
-                    self.results.append(result)
+            if exit_flag:
 
-            self.print_summary(strategy_type)
+                gross = (exit_price - pos["entry_price"]) / pos["entry_price"]
+                net = gross - commission*2 - stamp
+                cash += pos["invested"] * (1 + net)
 
-            if self.results_file and self.results:
-                results_df = pd.DataFrame(self.results)
-                strategy_file = self.results_file.replace('.csv', f'_{strategy_type}.csv')
-                results_df.to_csv(strategy_file, index=False, encoding='utf-8-sig')
-                print(f"回测结果已保存到 {strategy_file}")
+                stock = pos["stock"]
+                
+                # 🔥 记录每年收益率
+                year = current_date.year
+                if year not in yearly_returns:
+                    yearly_returns[year] = []
+                yearly_returns[year].append(gross)
 
-            all_results.extend(self.results)
+                # ===== 更新连续止损统计 =====
+                if stop_triggered:
+                    loss_streak[stock] += 1
+                    # 修复冷却机制：连续止损 3 次后暂停 2 次交易，增强回撤控制
+                    if loss_streak[stock] >= 3:
+                        cooldown_flag[stock] = True
+                        cooldown_count[stock] = 2  # 暂停 2 次交易
+                        loss_streak[stock] = 0
+                else:
+                    loss_streak[stock] = 0
 
-        self.print_strategy_comparison()
+            else:
+                pos["current_price"] = close
+                new_positions.append(pos)
 
-        self.log_results()
+        positions = new_positions
 
-        return all_results
+        # ===== 计算净值 =====
+        total_equity = cash
+        for pos in positions:
+            total_equity += pos["invested"] * (
+                pos["current_price"] / pos["entry_price"]
+            )
 
-    def log_results(self):
-        buy_conditions = """1. 趋势条件: 知行多空线 <= 知行短期趋势线
-2. J值条件: 昨日J值 <= 50 且 今日J值 <= 80
-3. 涨幅条件: 今日涨幅 >= 4%
-4. 成交量放量: 今日成交量 > 昨日成交量
-5. 成交量3倍: 今日成交量 > 昨日成交量 * 3
-6. 上影线条件: 上影线长度 / 实体长度 < 30%"""
+        equity_curve.append(total_equity)
 
-        sell_conditions = """策略1: 持有1天后（第2天）以收盘价卖出
-策略2: 持有1天后（第2天）以开盘价卖出
-策略3: 持有2天后（第3天）以收盘价卖出
-策略4: 持有2天后（第3天）以开盘价卖出
-策略5: 持有3天后（第4天）以收盘价卖出
-策略6: 持有3天后（第4天）以开盘价卖出
-策略7: 持有4天后（第5天）以收盘价卖出
-策略8: 持有4天后（第5天）以开盘价卖出
-策略9: 持有5天后（第6天）以收盘价卖出
-策略10: 持有5天后（第6天）以开盘价卖出
-策略11: 买入后任何日期最高价涨幅>=3%则止盈卖出
-策略12: 买入后任何日期最高价涨幅>=4%则止盈卖出
-策略13: 买入后任何日期最高价涨幅>=5%则止盈卖出
-策略14: 买入后任何日期最高价涨幅>=6%则止盈卖出
-策略15: 买入后任何日期最高价涨幅>=7%则止盈卖出
-策略16: 买入后任何日期最高价涨幅>=8%则止盈卖出
-策略17: 买入后任何日期最高价涨幅>=9%则止盈卖出"""
+        # ===== 新建仓 =====
+        if current_date not in daily_signals:
+            continue
 
-        stop_loss = "止损价为发出买入信号当天的最低价"
+        available_slots = max_positions - len(positions)
+        if available_slots <= 0:
+            continue
 
-        results_summary = ""
-        for strategy_type in ['2天收盘卖', '2天开盘卖', '3%止盈', '4%止盈', '5%止盈']:
-            strategy_file = self.results_file.replace('.csv', f'_{strategy_type}.csv')
-            if os.path.exists(strategy_file):
-                df = pd.read_csv(strategy_file)
-                if not df.empty:
-                    avg_success = df['success_rate'].mean()
-                    avg_annual = df['annual_return'].mean()
-                    results_summary += f"\n{strategy_type}: 成功率={avg_success:.2%}, 平均年化={avg_annual:.2f}%"
+        signals_today = daily_signals[current_date]
 
-        log_backtest_result(
-            "backtest_b2_strategy",
-            results_summary,
-            buy_conditions,
-            sell_conditions,
-            stop_loss,
-            self.data_dir,
-            "单股串行"
-        )
+        for stock in signals_today:
 
-    def print_summary(self, strategy_type):
-        if not self.results:
-            print("没有回测结果")
-            return
+            if available_slots <= 0:
+                break
 
-        results_df = pd.DataFrame(self.results)
-
-        total_stocks = len(results_df)
-        traded_stocks = len(results_df[results_df['num_trades'] > 0])
-        total_trades = results_df['num_trades'].sum()
-        total_profit = results_df['total_profit'].sum()
-        avg_profit_per_trade = total_profit / total_trades if total_trades > 0 else 0
-        profitable_stocks = len(results_df[results_df['total_profit'] > 0])
-        profitable_stocks_ratio = profitable_stocks / total_stocks if total_stocks > 0 else 0
-        avg_success_rate = results_df['success_rate'].mean()
-        avg_annual_return = results_df['annual_return'].mean()
-        max_annual_return = results_df['annual_return'].max() if not results_df.empty else 0
-        max_drawdown = results_df['max_drawdown'].max() if not results_df.empty else 0
-        avg_drawdown = results_df['avg_drawdown'].mean() if not results_df.empty else 0
-        max_consecutive_losses = results_df['max_consecutive_losses'].max() if not results_df.empty else 0
-        avg_consecutive_losses = results_df['avg_consecutive_losses'].mean() if not results_df.empty else 0
-        avg_sharpe = results_df['sharpe_ratio'].mean() if not results_df.empty else 0
-        avg_turnover = results_df['turnover_rate'].mean() if not results_df.empty else 0
-        avg_holding = results_df['avg_holding_time'].mean() if not results_df.empty else 0
-        avg_density = results_df['trade_density'].mean() if not results_df.empty else 0
-
-        print(f"\n回测总结 ({strategy_type}):")
-        print(f"总股票数: {total_stocks}")
-        print(f"有交易的股票数: {traded_stocks}")
-        print(f"总交易次数: {total_trades}")
-        print(f"总盈利: {total_profit:.4f}")
-        print(f"平均每笔交易盈利: {avg_profit_per_trade:.4f}")
-        print(f"盈利股票比例: {profitable_stocks_ratio:.2%}")
-        print(f"平均成功率: {avg_success_rate:.2%}")
-        print(f"平均年化收益率: {avg_annual_return:.4f}%")
-        print(f"最大年化收益率: {max_annual_return:.4f}%")
-        print(f"最大回撤: {max_drawdown:.4f}%")
-        print(f"平均回撤: {avg_drawdown:.4f}%")
-        print(f"最大连续失败次数: {max_consecutive_losses}")
-        print(f"平均连续失败次数: {avg_consecutive_losses:.2f}")
-        print(f"夏普比率: {avg_sharpe:.4f}")
-        print(f"平均每天交易次数: {results_df['avg_daily_trades'].mean():.4f}")
-        print(f"平均换手率: {avg_turnover:.4f}%")
-        print(f"平均持仓时间: {avg_holding:.2f}天")
-        print(f"交易密度: {avg_density:.4f}")
-
-    def print_strategy_comparison(self):
-        print(f"\n{'='*120}")
-        print("策略对比总结")
-        print(f"{'='*120}")
-
-        strategy_files = []
-        for root, dirs, files in os.walk('/Users/lidongyang/Desktop/Qstrategy'):
-            for f in files:
-                if f.startswith('backtest_b2_results_') and f.endswith('.csv'):
-                    strategy_files.append(os.path.join(root, f))
-
-        if not strategy_files:
-            return
-
-        print(f"{'策略名称':<20} {'成功率':>8} {'平均年化':>12} {'最大年化':>12} {'最大回撤':>10} {'平均回撤':>10} {'夏普比率':>10} {'换手率':>10} {'持仓时间':>10} {'交易密度':>10}")
-        print("-" * 120)
-
-        for file_path in strategy_files:
-            df = pd.read_csv(file_path)
-            if df.empty:
+            # 🔥 冷却机制（修复：暂停 2 次交易而非 1 次）
+            if cooldown_flag[stock] and cooldown_count[stock] > 0:
+                cooldown_count[stock] -= 1
+                if cooldown_count[stock] == 0:
+                    cooldown_flag[stock] = False
                 continue
 
-            strategy_name = os.path.basename(file_path).replace('backtest_b2_results_', '').replace('.csv', '')
+            df = stock_data[stock]
+            idx = df.index.get_loc(current_date)
 
-            avg_success_rate = df['success_rate'].mean()
-            avg_annual_return = df['annual_return'].mean()
-            max_annual_return = df['annual_return'].max()
-            max_drawdown = df['max_drawdown'].max()
-            avg_drawdown = df['avg_drawdown'].mean()
-            avg_sharpe = df['sharpe_ratio'].mean()
-            avg_turnover = df['turnover_rate'].mean()
-            avg_holding = df['avg_holding_time'].mean()
-            avg_density = df['trade_density'].mean()
+            if idx + 1 >= len(df):
+                continue
 
-            print(f"{strategy_name:<20} {avg_success_rate:>6.2%} {avg_annual_return:>12.4f} {max_annual_return:>12.4f} {max_drawdown:>10.2f}% {avg_drawdown:>10.2f}% {avg_sharpe:>10.4f} {avg_turnover:>10.4f} {avg_holding:>10.2f} {avg_density:>10.4f}")
+            entry_price = df.iloc[idx+1]["OPEN"]
+            stop_price = df.iloc[idx]["LOW"]  # B2 信号发出时的最低点
+
+            # 修复资金分配：按当前现金动态分配，而非固定初始资金
+            invested = cash / available_slots
+            cash -= invested
+
+            positions.append({
+                "stock": stock,
+                "entry_price": entry_price,
+                "entry_date": current_date,
+                "invested": invested,
+                "current_price": entry_price,
+                "stop_price": stop_price
+            })
+
+            available_slots -= 1
+
+    equity_curve = np.array(equity_curve)
+    
+    # 边界保护：如果没有交易数据
+    if len(equity_curve) == 0:
+        print("错误：没有交易数据，请检查数据源和信号条件")
+        return
+
+    daily_returns = np.diff(equity_curve) / equity_curve[:-1]
+    daily_returns = daily_returns[np.isfinite(daily_returns)]
+
+    # 修复 CAGR 边界保护 + 年化时间计算（使用真实日期差）
+    final_multiple = equity_curve[-1] / initial_capital
+    
+    # 使用真实日期差计算年数（修复年化失真）
+    start_date = all_dates[0]
+    end_date = all_dates[-1]
+    total_days = (end_date - start_date).days
+    total_years = total_days / 365.25
+    
+    # CAGR 边界保护
+    if total_years > 0 and final_multiple > 0:
+        CAGR = final_multiple ** (1 / total_years) - 1
+    else:
+        CAGR = 0.0
+
+    running_max = np.maximum.accumulate(equity_curve)
+    drawdowns = (equity_curve - running_max) / running_max
+    max_dd = np.min(drawdowns)
+
+    sharpe = 0
+    if len(daily_returns) > 1 and np.std(daily_returns) > 0:
+        sharpe = (np.mean(daily_returns) /
+                  np.std(daily_returns)) * np.sqrt(252)
+
+    result = (
+        "===== 加入连续止损暂停机制 =====\n\n"
+        f"CAGR: {CAGR:.4f}\n"
+        f"最大回撤: {max_dd:.4f}\n"
+        f"年化夏普: {sharpe:.4f}\n"
+        f"最终资金倍数: {final_multiple:.4f}"
+    )
+
+    print(result)
+    
+    # 🔥 打印每年收益率分布
+    print("\n" + "=" * 50)
+    print("每年收益率分布")
+    print("=" * 50)
+    for year in sorted(yearly_returns.keys()):
+        returns = yearly_returns[year]
+        if returns:
+            avg_return = np.mean(returns) * 100
+            win_rate = np.mean([r > 0 for r in returns]) * 100
+            print(f"{year}年: 交易次数={len(returns)}, 平均收益率={avg_return:.2f}%, 胜率={win_rate:.1f}%")
+    
+    print("\n" + "=" * 50)
+    print("持有期间收益率分布统计")
+    print("=" * 50)
+    
+    all_trade_returns = []
+    for year_returns in yearly_returns.values():
+        all_trade_returns.extend(year_returns)
+    
+    if all_trade_returns:
+        returns_arr = np.array(all_trade_returns)
+        returns_pct = returns_arr * 100
+        
+        bins = [(-200, -10), (-10, -5), (-5, -2), (-2, 0), (0, 2), (2, 5), (5, 10), (10, 200)]
+        print(f"{'收益率区间':<15} {'交易次数':<10} {'占比':<10}")
+        print("-" * 35)
+        for low, high in bins:
+            count = np.sum((returns_pct >= low) & (returns_pct < high))
+            pct = count / len(returns_pct) * 100 if len(returns_pct) > 0 else 0
+            print(f"[{low:>5}%, {high:<5}%)    {count:<10} {pct:.2f}%")
+        
+        median_return = np.median(returns_arr) * 100
+        print(f"\n收益率中位数: {median_return:.2f}%")
+        print(f"平均收益率: {np.mean(returns_arr) * 100:.2f}%")
+        
+        if len(returns_arr) >= 2:
+            returns_sorted = np.sort(returns_arr)
+            print(f"25分位数: {returns_sorted[len(returns_arr)//4] * 100:.2f}%")
+            print(f"75分位数: {returns_sorted[len(returns_arr)*3//4] * 100:.2f}%")
+        
+        var_95 = np.percentile(returns_arr, 5) * 100
+        cvar_95 = returns_arr[returns_arr <= np.percentile(returns_arr, 5)].mean() * 100
+        print(f"VaR(95%): {var_95:.2f}%")
+        print(f"CVaR(95%): {cvar_95:.2f}%")
+        
+        print(f"\n最大盈利: {returns_arr.max() * 100:.2f}%")
+        print(f"最大亏损: {returns_arr.min() * 100:.2f}%")
+        print(f"收益标准差: {returns_arr.std() * 100:.2f}%")
+    
+    write_log(result)
 
 
 if __name__ == "__main__":
-    data_dir = "/Users/lidongyang/Desktop/Qstrategy/data/20260225"
-    results_file = "/Users/lidongyang/Desktop/Qstrategy/backtest_b2_results.csv"
 
-    backtest = B2StrategyBacktest(data_dir, results_file)
-    backtest.run(test_mode=False)
+    data_dir = "/Users/lidongyang/Desktop/Qstrategy/data/forward_data"
+
+    run_backtest(
+        data_dir=data_dir,
+        volume_multiplier=1.0,  # 修改：只要放量即可（不要求2倍）
+        profit_target=8,
+        stop_loss=2,
+        initial_capital=1_000_000,
+        max_positions=4
+    )

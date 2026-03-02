@@ -1,6 +1,48 @@
 import os
 import pandas as pd
 import numpy as np
+from datetime import datetime
+
+
+# ===========================
+# 涨跌幅限制
+# ===========================
+
+def is_chi_next_or_star(stock_code):
+    """判断是否为创业板或科创板股票"""
+    code = stock_code.upper()
+    if code.startswith("300") or code.startswith("688"):
+        return True
+    return False
+
+def limit_price_change(price, prev_price, stock_code, direction="both"):
+    """
+    限制涨跌幅
+    direction: "up"=涨停, "down"=跌停, "both"=双向限制
+    """
+    if prev_price <= 0 or price <= 0:
+        return price
+    
+    change_pct = (price - prev_price) / prev_price
+    
+    if is_chi_next_or_star(stock_code):
+        max_change = 0.20  # 创业板/科创板 20%
+    else:
+        max_change = 0.10  # 主板 10%
+    
+    if direction == "up":
+        max_change = max_change
+    elif direction == "down":
+        max_change = -max_change
+    else:
+        max_change = max_change
+    
+    if change_pct > max_change:
+        return prev_price * (1 + max_change)
+    elif change_pct < -max_change:
+        return prev_price * (1 - max_change)
+    
+    return price
 
 
 def tongdaxin_sma(series, n, m=1):
@@ -19,32 +61,31 @@ def tongdaxin_sma(series, n, m=1):
 
 def brick_chart_indicator(df):
     df = df.copy()
-    
+
     df['HHV_H4'] = df['HIGH'].rolling(window=4).max()
     df['LLV_L4'] = df['LOW'].rolling(window=4).min()
-    
+
     df['VAR1A'] = (df['HHV_H4'] - df['CLOSE']) / (df['HHV_H4'] - df['LLV_L4']) * 100 - 90
     df['VAR1A'] = df['VAR1A'].replace([np.inf, -np.inf], np.nan).fillna(0)
-    
+
     df['VAR2A'] = tongdaxin_sma(df['VAR1A'], 4, 1) + 100
-    
+
     df['VAR3A'] = (df['CLOSE'] - df['LLV_L4']) / (df['HHV_H4'] - df['LLV_L4']) * 100
     df['VAR3A'] = df['VAR3A'].replace([np.inf, -np.inf], np.nan).fillna(0)
-    
+
     df['VAR4A'] = tongdaxin_sma(df['VAR3A'], 6, 1)
-    
     df['VAR5A'] = tongdaxin_sma(df['VAR4A'], 6, 1) + 100
-    
+
     df['VAR6A'] = df['VAR5A'] - df['VAR2A']
-    
+
     df['砖型图数值'] = np.where(df['VAR6A'] > 4, df['VAR6A'] - 4, 0)
-    
     df['砖型图变化量'] = df['砖型图数值'] - df['砖型图数值'].shift(1)
+
     df['当日柱体长度'] = df['砖型图变化量'].abs()
     df['前日柱体长度'] = df['当日柱体长度'].shift(1)
     df['当日红柱'] = df['砖型图变化量'] > 0
     df['前日绿柱'] = df['砖型图变化量'].shift(1) < 0
-    
+
     df['买入信号'] = np.where(
         (df['前日绿柱'] == True) &
         (df['当日红柱'] == True) &
@@ -52,856 +93,532 @@ def brick_chart_indicator(df):
         1,
         0
     )
-    
+
     df = df.dropna()
-    
+
     return df
 
 
-def calculate_trend(df, N=9, M1=14, M2=28, M3=57, M4=114):
+def calculate_trend(df):
     df['知行短期趋势线'] = df['CLOSE'].ewm(span=10, adjust=False).mean()
     df['知行短期趋势线'] = df['知行短期趋势线'].ewm(span=10, adjust=False).mean()
-    
-    df['MA14'] = df['CLOSE'].rolling(window=M1).mean()
-    df['MA28'] = df['CLOSE'].rolling(window=M2).mean()
-    df['MA57'] = df['CLOSE'].rolling(window=M3).mean()
-    df['MA114'] = df['CLOSE'].rolling(window=M4).mean()
+
+    df['MA14'] = df['CLOSE'].rolling(window=14).mean()
+    df['MA28'] = df['CLOSE'].rolling(window=28).mean()
+    df['MA57'] = df['CLOSE'].rolling(window=57).mean()
+    df['MA114'] = df['CLOSE'].rolling(window=114).mean()
+
     df['知行多空线'] = (df['MA14'] + df['MA28'] + df['MA57'] + df['MA114']) / 4
-    
+
     return df
 
 
-def calculate_kdj(df, N=9, M1=3, M2=3):
-    df['HHV9'] = df['HIGH'].rolling(window=N, min_periods=1).max()
-    df['LLV9'] = df['LOW'].rolling(window=N, min_periods=1).min()
-    df['RNG'] = df['HHV9'] - df['LLV9']
+def check_data_anomaly(df):
+    anomaly_reasons = []
     
-    df['RSV'] = (df['CLOSE'] - df['LLV9']) / (df['HHV9'] - df['LLV9']) * 100
+    if len(df) < 2:
+        return True, anomaly_reasons
     
-    df['K'] = df['RSV'].ewm(alpha=1/M1, adjust=False).mean()
-    df['D'] = df['K'].ewm(alpha=1/M2, adjust=False).mean()
-    
-    df['J'] = 3 * df['K'] - 2 * df['D']
-    
-    return df
-
-
-def check_buy_conditions(df, i, next_data):
-    if i < 60 or i < 30 or i < 60 or i < 3:
-        return False
-    
-    current_data = df.iloc[i]
-    current_close = current_data['CLOSE']
-    current_open = current_data['OPEN']
-    duokongxian = current_data['知行多空线']
-    short_trend = current_data['知行短期趋势线']
-    
-    brick_value = current_data.get('砖型图数值', 0)
-    brick_value_yesterday = df.iloc[i-1].get('砖型图数值', 0)
-    brick_change = current_data.get('砖型图变化量', 0)
-    brick_change_yesterday = df.iloc[i-1].get('砖型图变化量', 0)
-    
-    prev_close = df.iloc[i-1]['CLOSE']
-    prev_high = df.iloc[i-1]['HIGH']
-    prev_open = df.iloc[i-1]['OPEN']
-    
-    condition1 = next_data['OPEN'] <= prev_high
-    
-    condition2 = next_data['OPEN'] < short_trend * 1.02
-    
-    closes_60 = df['CLOSE'].iloc[i-59:i+1].values
-    opens_60 = df['OPEN'].iloc[i-59:i+1].values
-    
-    min_close_idx = np.argmin(closes_60)
-    min_close_second = closes_60[min_close_idx]
-    
-    condition3 = True
-    bottoms = []
-    for j in range(len(closes_60)):
-        if j == min_close_idx:
-            bottoms.append(closes_60[j])
-        elif closes_60[j] < min_close_second * 1.01:
-            min_close_second = closes_60[j]
-            min_close_idx = j
-            bottoms.append(closes_60[j])
-    
-    for k in range(1, len(bottoms)):
-        if bottoms[k] <= bottoms[k-1]:
-            condition3 = False
-            break
-    
-    today_pct = (current_close - prev_close) / prev_close * 100
-    condition4 = True
-    
-    condition5 = True
-    green_count = 0
-    for j in range(1, 4):
-        if df.iloc[i-j].get('砖型图变化量', 0) < 0:
-            green_count += 1
-        else:
-            break
-    if green_count < 3:
-        condition5 = False
-    
-    condition6 = brick_change > 0 and brick_change_yesterday < 0 and brick_value > brick_value_yesterday
-    
-    condition8 = True
-    for j in range(30):
-        if i - j - 3 < 0:
-            break
-        pct_j = (df.iloc[i-j]['CLOSE'] - df.iloc[i-j-1]['CLOSE']) / df.iloc[i-j-1]['CLOSE'] * 100
-        pct_j1 = (df.iloc[i-j-1]['CLOSE'] - df.iloc[i-j-2]['CLOSE']) / df.iloc[i-j-2]['CLOSE'] * 100
-        pct_j2 = (df.iloc[i-j-2]['CLOSE'] - df.iloc[i-j-3]['CLOSE']) / df.iloc[i-j-3]['CLOSE'] * 100
-        if pct_j > 8 and pct_j1 > 8 and pct_j2 > 8:
-            if i - j - 1 >= 0:
-                current_k = df.iloc[i-j-1]
-                next_k = df.iloc[i-j]
-                if current_k['CLOSE'] > current_k['OPEN'] and next_k['CLOSE'] < next_k['OPEN']:
-                    if next_k['VOLUME'] > current_k['VOLUME'] / 2:
-                        condition8 = False
+    for i in range(len(df)):
+        row = df.iloc[i]
+        open_p = row['OPEN']
+        high = row['HIGH']
+        low = row['LOW']
+        close = row['CLOSE']
+        volume = row['VOLUME']
+        
+        if pd.isna(open_p) or pd.isna(high) or pd.isna(low) or pd.isna(close):
+            anomaly_reasons.append(f"{df.index[i]} 数据缺失")
+            continue
+        
+        if high == low == close:
+            anomaly_reasons.append(f"{df.index[i]} 一字板")
+            continue
+        
+        if i > 0:
+            prev_close = df.iloc[i-1]['CLOSE']
+            if prev_close > 0:
+                change_pct = (close - prev_close) / prev_close * 100
+                if change_pct > 20 or change_pct < -20:
+                    anomaly_reasons.append(f"{df.index[i]} 涨跌幅异常: {change_pct:.2f}%")
+                    continue
+        
+        if volume <= 0:
+            anomaly_reasons.append(f"{df.index[i]} 成交量为0")
+            continue
+        
+        if i >= 60:
+            rolling_vol = df.iloc[i-60:i]['VOLUME']
+            avg_vol = rolling_vol.mean()
+            if avg_vol > 0 and volume > avg_vol * 5:
+                anomaly_reasons.append(f"{df.index[i]} 成交量异常放大: {volume/avg_vol:.2f}倍")
+                continue
+        
+        if open_p < low or open_p > high:
+            anomaly_reasons.append(f"{df.index[i]} 开盘价不在高低区间")
+            continue
+        
+        if high > 0 and low > 0:
+            amplitude = (high - low) / low * 100
+            if i > 0:
+                prev_vol = df.iloc[i-1]['VOLUME']
+                vol_change = volume / prev_vol if prev_vol > 0 else 1
+                if amplitude > 15 and vol_change < 1.2:
+                    anomaly_reasons.append(f"{df.index[i]} 振幅异常但无放量")
+                    continue
+        
+        if i >= 1:
+            for j in range(1, min(6, i+1)):
+                if i - j >= 0:
+                    prev_change = (df.iloc[i-j]['CLOSE'] - df.iloc[i-j-1]['CLOSE']) / df.iloc[i-j-1]['CLOSE'] * 100
+                    if prev_change < -15:
+                        anomaly_reasons.append(f"{df.index[i]} 连续异常大跌")
                         break
     
-    condition9 = True
-    if i >= 89:
-        volumes_90 = df['VOLUME'].iloc[i-89:i+1].values
-        max_vol_idx_global = np.argmax(volumes_90)
-        if volumes_90[max_vol_idx_global] > 0:
-            max_vol_day = df.iloc[i-89+max_vol_idx_global]
-            if max_vol_day['CLOSE'] < max_vol_day['OPEN']:
-                condition9 = False
-    
-    return condition1 and condition2 and condition3 and condition4 and condition5 and condition6 and condition8 and condition9
-
-
-def check_b2_filter(df):
-    if len(df) < 4:
-        return False, False
-    
-    df_simple = df[['日期', 'OPEN', 'HIGH', 'LOW', 'CLOSE', 'VOLUME']].copy()
-    
-    df_simple = calculate_trend(df_simple)
-    df_simple = calculate_kdj(df_simple)
-    
-    today = df_simple.iloc[-1]
-    yesterday = df_simple.iloc[-2]
-    day_before_yesterday = df_simple.iloc[-3]
-    
-    if today['知行多空线'] > today['知行短期趋势线']:
-        return False, False
-    
-    j_label = False
-    volatility_label = False
-    volume_label = False
-    shadow_label = False
-    
-    if yesterday['J'] <= 50 and today['J'] <= 80:
-        j_label = True
-    
-    change_pct = (today['CLOSE'] - yesterday['CLOSE']) / yesterday['CLOSE'] * 100
-    if change_pct >= 4:
-        volatility_label = True
-    
-    if today['VOLUME'] > yesterday['VOLUME']:
-        volume_label = True
-    
-    length = abs(df_simple['HIGH'].iloc[-1] - df_simple['OPEN'].iloc[-1])
-    if length > 0:
-        shadow_length = df_simple['HIGH'].iloc[-1] - df_simple['CLOSE'].iloc[-1]
-        shadow_ratio = shadow_length / length
-        if shadow_ratio < 0.3:
-            shadow_label = True
-    else:
-        shadow_label = True
-    
-    b2_today = j_label and volatility_label and volume_label and shadow_label
-    
-    j_label_lastday = False
-    volatility_label_lastday = False
-    volume_label_lastday = False
-    shadow_label_lastday = False
-    
-    if day_before_yesterday['J'] <= 50 and yesterday['J'] <= 80:
-        j_label_lastday = True
-    
-    change_pct_lastday = (yesterday['CLOSE'] - day_before_yesterday['CLOSE']) / day_before_yesterday['CLOSE'] * 100
-    if change_pct_lastday >= 4:
-        volatility_label_lastday = True
-    
-    if yesterday['VOLUME'] > day_before_yesterday['VOLUME']:
-        volume_label_lastday = True
-    
-    length_lastday = abs(df_simple['HIGH'].iloc[-2] - df_simple['OPEN'].iloc[-2])
-    if length_lastday > 0:
-        shadow_length_lastday = df_simple['HIGH'].iloc[-2] - df_simple['CLOSE'].iloc[-2]
-        shadow_ratio_lastday = shadow_length_lastday / length_lastday
-        if shadow_ratio_lastday < 0.3:
-            shadow_label_lastday = True
-    else:
-        shadow_label_lastday = True
-    
-    b2_lastday = j_label_lastday and volatility_label_lastday and volume_label_lastday and shadow_label_lastday
-    
-    return b2_today, b2_lastday
-
-
-class BrickStrategyBacktest:
-    def __init__(self, data_dir, results_file=None):
-        self.data_dir = data_dir
-        self.results_file = results_file
-        self.results = []
-        self.initial_capital = 1000000
-        self.data_cache = {}
-        self.sell_at_open = True
-    
-    def load_stock_data(self, file_path):
-        encodings = ['gbk', 'utf-8', 'latin-1', 'gb18030']
-        df = None
+    if len(df) >= 2:
+        first_price = df.iloc[0]['CLOSE']
+        last_price = df.iloc[-1]['CLOSE']
+        if first_price > 0 and last_price > 0:
+            total_change = (last_price - first_price) / first_price
+            if abs(total_change) > 100:
+                anomaly_reasons.append("全历史价格比例变化异常")
         
-        for encoding in encodings:
-            try:
-                with open(file_path, 'r', encoding=encoding) as f:
-                    lines = f.readlines()
-                
-                data = []
-                for i, line in enumerate(lines):
-                    line = line.strip()
-                    if not line:
-                        continue
-                    if i == 0 and '开盘' in line:
-                        continue
-                    parts = line.split()
-                    if len(parts) >= 6:
-                        try:
-                            date_str = parts[0]
-                            open_price = float(parts[1])
-                            high_price = float(parts[2])
-                            low_price = float(parts[3])
-                            close_price = float(parts[4])
-                            volume = float(parts[5])
-                            
-                            data.append([date_str, open_price, high_price, low_price, close_price, volume])
-                        except ValueError:
-                            continue
-                
-                df = pd.DataFrame(data, columns=['日期', 'OPEN', 'HIGH', 'LOW', 'CLOSE', 'VOLUME'])
-                df['日期'] = pd.to_datetime(df['日期'])
-                break
-            except (UnicodeDecodeError, LookupError):
-                continue
-            except Exception as e:
-                print(f"加载文件 {file_path} 失败: {str(e)}")
-                return None
+        if last_price < 0.5:
+            anomaly_reasons.append("股价极低")
         
-        if df is None:
+        if i >= 1:
+            avg_vol = df.iloc[:-1]['VOLUME'].mean()
+            if avg_vol > 0:
+                turnover = df.iloc[-1]['VOLUME'] * close
+                avg_turnover = avg_vol * first_price
+                if avg_turnover > 0 and turnover < avg_turnover * 0.001:
+                    anomaly_reasons.append("成交额过低")
+    
+    return len(anomaly_reasons) > 0, anomaly_reasons
+
+
+def load_stock(path):
+    try:
+        df = pd.read_csv(
+            path,
+            sep=r"\s+",
+            engine="python",
+            names=["日期", "OPEN", "HIGH", "LOW", "CLOSE", "VOLUME", "成交额"],
+            skiprows=1,
+            encoding='gbk'
+        )
+        df = df.iloc[1:]
+        df["日期"] = pd.to_datetime(df["日期"], errors='coerce')
+        df = df[df["日期"].notna()]
+        
+        for col in ["OPEN", "HIGH", "LOW", "CLOSE", "VOLUME"]:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        df = df.dropna()
+        
+        df = df.sort_values("日期")
+        df.set_index("日期", inplace=True)
+        df = df[~df.index.duplicated(keep='first')]
+        
+        if len(df) < 10:
             return None
         
-        df = df.sort_values('日期').reset_index(drop=True)
+        is_anomaly, reasons = check_data_anomaly(df)
+        if is_anomaly:
+            return None
+        
         return df
+    except:
+        return None
+
+
+def run_backtest(data_dir, initial_capital=1_000_000, max_positions=4):
+    stock_data = {}
+    daily_signals = {}
     
-    def run_strategy(self, df, stock_code, strategy_type):
+    # 使用固定金额仓位（每次投入固定金额，不受复利影响）
+    fixed_investment = 100000  # 每次投入10万元
+
+    files = [f for f in os.listdir(data_dir) if f.endswith(".txt")]
+    total = len(files)
+
+    print(f"加载 {total} 只股票...")
+
+    for idx, file in enumerate(files, 1):
+        if idx % 500 == 0:
+            print(f"[加载 {idx}/{total}]")
+
+        df = load_stock(os.path.join(data_dir, file))
+        if df is None or len(df) < 120:
+            continue
+
         df = calculate_trend(df)
         df = brick_chart_indicator(df)
-        
-        position = 0
-        entry_price = 0
-        entry_date = None
-        entry_low = 0
-        entry_is_bearish = False
-        half_sold = False
-        entry_index = 0
-        max_high_since_entry = 0
-        min_low_since_entry = float('inf')
-        trades = []
-        completed_trades = []
-        capital = self.initial_capital
-        
-        for i in range(len(df)):
-            current_data = df.iloc[i]
-            current_date = current_data['日期']
-            current_close = current_data['CLOSE']
-            current_open = current_data['OPEN']
-            current_low = current_data['LOW']
-            current_high = current_data['HIGH']
-            brick_value = current_data.get('砖型图数值', 0)
-            xg_signal = current_data.get('买入信号', 0)
-            duokongxian = current_data.get('知行多空线', 0)
-            
-            if position > 0:
-                holding_days = (current_date - entry_date).days
-                
-                if current_high > max_high_since_entry:
-                    max_high_since_entry = current_high
-                if current_low < min_low_since_entry:
-                    min_low_since_entry = current_low
-                
-                if holding_days >= 1:
-                    period_max_profit_pct = (max_high_since_entry - entry_price) / entry_price * 100
-                    current_profit_pct = (current_close - entry_price) / entry_price * 100
-                    
-                    if strategy_type == '2%止盈':
-                        if period_max_profit_pct >= 2 and holding_days <= 2:
-                            exit_price = current_close
-                            exit_date = current_date
-                            profit = (exit_price - entry_price) * position * capital / entry_price
-                            capital += profit
-                            
-                            drawdown = (entry_price - min_low_since_entry) / entry_price * 100 if min_low_since_entry < entry_price else 0
-                            
-                            trades.append({
-                                'entry_date': entry_date,
-                                'exit_date': exit_date,
-                                'entry_price': entry_price,
-                                'exit_price': exit_price,
-                                'profit': profit,
-                                'profit_pct': 2.0,
-                                'position': position,
-                                'type': '2%止盈卖出',
-                                'drawdown': drawdown
-                            })
-                            completed_trades.append(trades[-1])
-                            position = 0
-                            entry_price = 0
-                            entry_date = None
-                            entry_low = 0
-                            entry_is_bearish = False
-                            half_sold = False
-                            max_high_since_entry = 0
-                            min_low_since_entry = float('inf')
-                        
-                        elif holding_days >= 3:
-                            exit_price = current_close
-                            exit_date = current_date
-                            profit = (exit_price - entry_price) * position * capital / entry_price
-                            capital += profit
-                            
-                            drawdown = (entry_price - min_low_since_entry) / entry_price * 100 if min_low_since_entry < entry_price else 0
-                            
-                            trades.append({
-                                'entry_date': entry_date,
-                                'exit_date': exit_date,
-                                'entry_price': entry_price,
-                                'exit_price': exit_price,
-                                'profit': profit,
-                                'profit_pct': (exit_price - entry_price) / entry_price * 100,
-                                'position': position,
-                                'type': '第3天收盘卖出',
-                                'drawdown': drawdown
-                            })
-                            completed_trades.append(trades[-1])
-                            position = 0
-                            entry_price = 0
-                            entry_date = None
-                            entry_low = 0
-                            entry_is_bearish = False
-                            half_sold = False
-                            max_high_since_entry = 0
-                            min_low_since_entry = float('inf')
-                    
-                    elif strategy_type == '3%止盈':
-                        if period_max_profit_pct >= 3 and holding_days <= 2:
-                            exit_price = current_close
-                            exit_date = current_date
-                            profit = (exit_price - entry_price) * position * capital / entry_price
-                            capital += profit
-                            
-                            drawdown = (entry_price - min_low_since_entry) / entry_price * 100 if min_low_since_entry < entry_price else 0
-                            
-                            trades.append({
-                                'entry_date': entry_date,
-                                'exit_date': exit_date,
-                                'entry_price': entry_price,
-                                'exit_price': exit_price,
-                                'profit': profit,
-                                'profit_pct': 3.0,
-                                'position': position,
-                                'type': '3%止盈卖出',
-                                'drawdown': drawdown
-                            })
-                            completed_trades.append(trades[-1])
-                            position = 0
-                            entry_price = 0
-                            entry_date = None
-                            entry_low = 0
-                            entry_is_bearish = False
-                            half_sold = False
-                            max_high_since_entry = 0
-                            min_low_since_entry = float('inf')
-                        
-                        elif holding_days >= 3:
-                            exit_price = current_close
-                            exit_date = current_date
-                            profit = (exit_price - entry_price) * position * capital / entry_price
-                            capital += profit
-                            
-                            drawdown = (entry_price - min_low_since_entry) / entry_price * 100 if min_low_since_entry < entry_price else 0
-                            
-                            trades.append({
-                                'entry_date': entry_date,
-                                'exit_date': exit_date,
-                                'entry_price': entry_price,
-                                'exit_price': exit_price,
-                                'profit': profit,
-                                'profit_pct': (exit_price - entry_price) / entry_price * 100,
-                                'position': position,
-                                'type': '第3天收盘卖出',
-                                'drawdown': drawdown
-                            })
-                            completed_trades.append(trades[-1])
-                            position = 0
-                            entry_price = 0
-                            entry_date = None
-                            entry_low = 0
-                            entry_is_bearish = False
-                            half_sold = False
-                            max_high_since_entry = 0
-                            min_low_since_entry = float('inf')
-                    
-                    elif strategy_type == '5%卖一半':
-                        if holding_days == 2:
-                            if current_profit_pct >= 5 and not half_sold:
-                                exit_price = current_close
-                                exit_date = current_date
-                                sell_ratio = 0.5
-                                profit = (exit_price - entry_price) * sell_ratio * position * capital / entry_price
-                                capital += profit
-                                
-                                trades.append({
-                                    'entry_date': entry_date,
-                                    'exit_date': exit_date,
-                                    'entry_price': entry_price,
-                                    'exit_price': exit_price,
-                                    'profit': profit,
-                                    'profit_pct': (exit_price - entry_price) / entry_price * 100,
-                                    'position': sell_ratio * position,
-                                    'type': '第3天卖出一半'
-                                })
-                                
-                                position = position * 0.5
-                                half_sold = True
-                                max_high_since_entry = 0
-                                min_low_since_entry = float('inf')
-                            
-                            elif not half_sold:
-                                exit_price = current_close
-                                exit_date = current_date
-                                profit = (exit_price - entry_price) * position * capital / entry_price
-                                capital += profit
-                                
-                                drawdown = (entry_price - min_low_since_entry) / entry_price * 100 if min_low_since_entry < entry_price else 0
-                                
-                                trades.append({
-                                    'entry_date': entry_date,
-                                    'exit_date': exit_date,
-                                    'entry_price': entry_price,
-                                    'exit_price': exit_price,
-                                    'profit': profit,
-                                    'profit_pct': (exit_price - entry_price) / entry_price * 100,
-                                    'position': position,
-                                    'type': '第3天全仓卖出',
-                                    'drawdown': drawdown
-                                })
-                                completed_trades.append(trades[-1])
-                                position = 0
-                                entry_price = 0
-                                entry_date = None
-                                entry_low = 0
-                                entry_is_bearish = False
-                                half_sold = False
-                                max_high_since_entry = 0
-                                min_low_since_entry = float('inf')
-                        
-                        elif half_sold and holding_days >= 5:
-                            if i < len(df) - 1:
-                                next_open = df.iloc[i+1]['OPEN']
-                                exit_price = next_open
-                                exit_date = df.iloc[i+1]['日期']
-                            else:
-                                exit_price = current_close
-                                exit_date = current_date
-                            profit = (exit_price - entry_price) * position * capital / entry_price
-                            capital += profit
-                            
-                            drawdown = (entry_price - min_low_since_entry) / entry_price * 100 if min_low_since_entry < entry_price else 0
-                            
-                            trades.append({
-                                'entry_date': entry_date,
-                                'exit_date': exit_date,
-                                'entry_price': entry_price,
-                                'exit_price': exit_price,
-                                'profit': profit,
-                                'profit_pct': (exit_price - entry_price) / entry_price * 100,
-                                'position': position,
-                                'type': '剩余一半卖出',
-                                'drawdown': drawdown
-                            })
-                            completed_trades.append(trades[-1])
-                            position = 0
-                            entry_price = 0
-                            entry_date = None
-                            entry_low = 0
-                            entry_is_bearish = False
-                            half_sold = False
-                            max_high_since_entry = 0
-                            min_low_since_entry = float('inf')
-                    
-                    elif strategy_type == '2天收盘卖':
-                        if holding_days >= 2:
-                            exit_price = current_close
-                            exit_date = current_date
-                            profit = (exit_price - entry_price) * position * capital / entry_price
-                            capital += profit
-                            
-                            drawdown = (entry_price - min_low_since_entry) / entry_price * 100 if min_low_since_entry < entry_price else 0
-                            
-                            trades.append({
-                                'entry_date': entry_date,
-                                'exit_date': exit_date,
-                                'entry_price': entry_price,
-                                'exit_price': exit_price,
-                                'profit': profit,
-                                'profit_pct': (exit_price - entry_price) / entry_price * 100,
-                                'position': position,
-                                'type': '第2天收盘卖出',
-                                'drawdown': drawdown
-                            })
-                            completed_trades.append(trades[-1])
-                            position = 0
-                            entry_price = 0
-                            entry_date = None
-                            entry_low = 0
-                            entry_is_bearish = False
-                            half_sold = False
-                            max_high_since_entry = 0
-                            min_low_since_entry = float('inf')
-                    
-                    elif strategy_type == '3天开盘卖':
-                        if holding_days >= 2:
-                            if i < len(df) - 1:
-                                next_open = df.iloc[i+1]['OPEN']
-                                exit_price = next_open
-                                exit_date = df.iloc[i+1]['日期']
-                            else:
-                                exit_price = current_close
-                                exit_date = current_date
-                            profit = (exit_price - entry_price) * position * capital / entry_price
-                            capital += profit
-                            
-                            drawdown = (entry_price - min_low_since_entry) / entry_price * 100 if min_low_since_entry < entry_price else 0
-                            
-                            trades.append({
-                                'entry_date': entry_date,
-                                'exit_date': exit_date,
-                                'entry_price': entry_price,
-                                'exit_price': exit_price,
-                                'profit': profit,
-                                'profit_pct': (exit_price - entry_price) / entry_price * 100,
-                                'position': position,
-                                'type': '第3天开盘卖出',
-                                'drawdown': drawdown
-                            })
-                            completed_trades.append(trades[-1])
-                            position = 0
-                            entry_price = 0
-                            entry_date = None
-                            entry_low = 0
-                            entry_is_bearish = False
-                            half_sold = False
-                            max_high_since_entry = 0
-                            min_low_since_entry = float('inf')
-                    
-                    elif strategy_type == '3天收盘卖':
-                        if holding_days >= 3:
-                            exit_price = current_close
-                            exit_date = current_date
-                            profit = (exit_price - entry_price) * position * capital / entry_price
-                            capital += profit
-                            
-                            drawdown = (entry_price - min_low_since_entry) / entry_price * 100 if min_low_since_entry < entry_price else 0
-                            
-                            trades.append({
-                                'entry_date': entry_date,
-                                'exit_date': exit_date,
-                                'entry_price': entry_price,
-                                'exit_price': exit_price,
-                                'profit': profit,
-                                'profit_pct': (exit_price - entry_price) / entry_price * 100,
-                                'position': position,
-                                'type': '第3天收盘卖出',
-                                'drawdown': drawdown
-                            })
-                            completed_trades.append(trades[-1])
-                            position = 0
-                            entry_price = 0
-                            entry_date = None
-                            entry_low = 0
-                            entry_is_bearish = False
-                            half_sold = False
-                            max_high_since_entry = 0
-                            min_low_since_entry = float('inf')
-                    
-                    elif entry_is_bearish and holding_days >= 1:
-                        if i < len(df) - 1:
-                            next_open = df.iloc[i+1]['OPEN']
-                            exit_price = next_open
-                            exit_date = df.iloc[i+1]['日期']
-                        else:
-                            exit_price = current_close
-                            exit_date = current_date
-                        profit = (exit_price - entry_price) * position * capital / entry_price
-                        capital += profit
-                        
-                        drawdown = (entry_price - min_low_since_entry) / entry_price * 100 if min_low_since_entry < entry_price else 0
-                        
-                        trades.append({
-                            'entry_date': entry_date,
-                            'exit_date': exit_date,
-                            'entry_price': entry_price,
-                            'exit_price': exit_price,
-                            'profit': profit,
-                            'profit_pct': (exit_price - entry_price) / entry_price * 100,
-                            'position': position,
-                            'type': '阴线次日止损',
-                            'drawdown': drawdown
-                        })
-                        completed_trades.append(trades[-1])
-                        position = 0
-                        entry_price = 0
-                        entry_date = None
-                        entry_low = 0
-                        entry_is_bearish = False
-                        half_sold = False
-                        max_high_since_entry = 0
-                        min_low_since_entry = float('inf')
-            
-            if position == 0:
-                buy_signal = current_data.get('买入信号', 0)
-                if buy_signal == 1:
-                    if i < len(df) - 1:
-                        next_data = df.iloc[i+1]
-                        next_open = next_data['OPEN']
-                        price_change = (next_open - current_close) / current_close * 100
-                        
-                        if price_change <= 3:
-                            next_close = next_data['CLOSE']
-                            next_high = next_data['HIGH']
-                            next_low = next_data['LOW']
-                            
-                            if next_close < next_open:
-                                is_bearish = True
-                            else:
-                                is_bearish = False
-                            
-                            if next_close >= duokongxian:
-                                if check_buy_conditions(df, i, next_data):
-                                    entry_price = next_open
-                                    entry_date = next_data['日期']
-                                    entry_low = current_low
-                                    entry_is_bearish = is_bearish
-                                    position = 1
-                                    entry_index = i + 1
-                                    half_sold = False
-                                    max_high_since_entry = next_high
-                                    min_low_since_entry = next_low
-                                    
-                                    trades.append({
-                                        'entry_date': entry_date,
-                                        'entry_price': entry_price,
-                                        'position': position,
-                                        'type': '砖型图信号买入'
-                                    })
-        
-        num_trades = len(completed_trades)
-        total_profit = sum([trade.get('profit', 0) for trade in completed_trades])
-        avg_profit = total_profit / num_trades if num_trades > 0 else 0
-        
-        win_trades = [trade for trade in completed_trades if trade.get('profit', 0) > 0]
-        win_rate = len(win_trades) / num_trades if num_trades > 0 else 0
-        
-        all_profit_pcts = [trade.get('profit_pct', 0) for trade in completed_trades if 'profit_pct' in trade]
-        avg_profit_pct = sum(all_profit_pcts) / len(all_profit_pcts) if all_profit_pcts else 0
-        max_profit_pct = max(all_profit_pcts) if all_profit_pcts else 0
-        
-        cumulative_profit = capital / self.initial_capital
-        
-        first_date = df['日期'].iloc[0]
-        last_date = df['日期'].iloc[-1]
-        total_days = (last_date - first_date).days
-        years = total_days / 365.0
-        if years > 0:
-            annual_return = (cumulative_profit - 1) / years
-        else:
-            annual_return = 0
-        
-        max_consecutive_losses = 0
-        current_consecutive_losses = 0
-        consecutive_losses = []
-        
-        for trade in completed_trades:
-            if trade.get('profit', 0) <= 0:
-                current_consecutive_losses += 1
-                if current_consecutive_losses > max_consecutive_losses:
-                    max_consecutive_losses = current_consecutive_losses
-            else:
-                if current_consecutive_losses > 0:
-                    consecutive_losses.append(current_consecutive_losses)
-                    current_consecutive_losses = 0
-        
-        if current_consecutive_losses > 0:
-            consecutive_losses.append(current_consecutive_losses)
-        
-        avg_consecutive_losses = sum(consecutive_losses) / len(consecutive_losses) if consecutive_losses else 0
-        
-        all_drawdowns = [trade.get('drawdown', 0) for trade in completed_trades if 'drawdown' in trade]
-        max_drawdown = max(all_drawdowns) if all_drawdowns else 0
-        avg_drawdown = sum(all_drawdowns) / len(all_drawdowns) if all_drawdowns else 0
-        
-        trading_days = years * 252
-        avg_daily_trades = num_trades / trading_days if trading_days > 0 else 0
-        
-        return {
-            'stock_code': stock_code,
-            'strategy_type': strategy_type,
-            'num_trades': num_trades,
-            'total_profit': total_profit,
-            'avg_profit_per_trade': avg_profit,
-            'success_rate': win_rate,
-            'win_rate': win_rate,
-            'max_drawdown': max_drawdown,
-            'avg_drawdown': avg_drawdown,
-            'cumulative_return': cumulative_profit - 1,
-            'annual_return': annual_return,
-            'max_consecutive_losses': max_consecutive_losses,
-            'avg_consecutive_losses': avg_consecutive_losses,
-            'avg_profit_pct': avg_profit_pct,
-            'max_profit_pct': max_profit_pct,
-            'final_capital': capital,
-            'avg_daily_trades': avg_daily_trades,
-            'trades': trades,
-            'completed_trades': completed_trades
-        }
+
+        stock_data[file] = df
+
+        for date in df.index[df["买入信号"] == 1]:
+            if date in df.index:
+                row = df.loc[date]
+                if row['知行多空线'] <= row['知行短期趋势线']:
+                    # 不使用未来函数，直接用当日收盘价
+                    if row['CLOSE'] >= row['知行多空线']:
+                        daily_signals.setdefault(date, []).append(file)
+
+    # 获取所有股票的日期并集作为时间轴
+    all_dates = sorted(set().union(*[df.index for df in stock_data.values()]))
+
+    print(f"总交易日: {len(all_dates)}")
+    print(f"有信号的天数: {len(daily_signals)}")
+
+    total_signals = sum(len(v) for v in daily_signals.values())
+    print(f"总信号数量: {total_signals}")
+
+    # 将日期转换为索引位置
+    date_to_idx = {date: idx for idx, date in enumerate(all_dates)}
+
+    cash = float(initial_capital)
+    positions = []
+    equity_curve = []
+    stopped = False
+    trade_count = 0
+    abnormal_count = 0
+    stock_returns = {}  # 记录每只股票的收益率
     
-    def run(self, test_mode=False):
-        stock_files = [f for f in os.listdir(self.data_dir) if f.endswith('.txt')]
-        print(f"找到 {len(stock_files)} 个股票文件")
-        
-        if test_mode:
-            print("测试模式：只运行前10个股票")
-            stock_files = stock_files[:10]
-        
-        print(f"预计总计算量: {len(stock_files)} × 3 种策略")
-        print("开始运行回测...")
-        
-        strategy_types = ['2%止盈', '3%止盈', '2天收盘卖', '3天开盘卖', '3天收盘卖']
-        
-        for strategy_type in strategy_types:
-            print(f"\n{'='*60}")
-            print(f"运行策略: {strategy_type}")
-            print(f"{'='*60}")
+    # 🔥 每年收益率统计
+    yearly_returns = {}  # {年份: [交易收益率列表]}
+
+    for current_date in all_dates:
+        if stopped:
+            break
             
-            self.results = []
+        current_idx = date_to_idx[current_date]
+        new_positions = []
+
+        for pos in positions:
+            df = stock_data[pos["stock"]]
+
+            if current_date not in df.index:
+                new_positions.append(pos)
+                continue
+
+            row = df.loc[current_date]
+
+            # 防止价格异常
+            if pd.isna(row["CLOSE"]) or row["CLOSE"] <= 0:
+                new_positions.append(pos)
+                continue
+
+            open_p = row["OPEN"]
+            high = row["HIGH"]
+            low = row["LOW"]
+            close = row["CLOSE"]
+
+            # 用股票自己的索引计算持有天数
+            df = stock_data[pos["stock"]]
+            stock_idx = df.index.get_loc(current_date)
+            stock_entry_idx = int(pos["entry_idx"])
+            holding_days = stock_idx - stock_entry_idx
+
+            entry_price = pos["entry_price"]
             
-            for i, file_name in enumerate(stock_files):
-                if i % 100 == 0:
-                    print(f"处理进度: {i}/{len(stock_files)}")
+            # 计算当天涨跌幅（相对买入价）
+            open_change = (open_p - entry_price) / entry_price  # 开盘价相对买入价的涨幅
+            high_change = (high - entry_price) / entry_price   # 最高价相对买入价的涨幅
+            low_change = (low - entry_price) / entry_price     # 最低价相对买入价的跌幅
+            
+            # 固定止盈止损
+            TP_RATE = 0.03   # 止盈3%
+            SL_RATE = -0.02  # 止损-2%
+            
+            exit_flag = False
+            exit_price = close
+            
+            # 开盘价优先原则：开盘价已穿过止盈/止损价，按开盘价成交
+            if open_change >= TP_RATE:
+                exit_price = open_p  # 开盘高开3%以上，以开盘价卖出
+                exit_flag = True
+            elif open_change <= SL_RATE:
+                exit_price = open_p  # 开盘低开2%以上，以开盘价卖出
+                exit_flag = True
+            # 检查是否触及止盈（盘中）
+            elif high_change >= TP_RATE:
+                exit_price = entry_price * (1 + TP_RATE)  # 以止盈价卖出
+                exit_flag = True
+            # 检查是否触及止损（盘中）
+            elif low_change <= SL_RATE:
+                exit_price = entry_price * (1 + SL_RATE)  # 以止损价卖出
+                exit_flag = True
+            # 检查是否持有满3天
+            elif holding_days >= 3:
+                exit_price = close  # 第3天收盘价卖出
+                exit_flag = True
+
+            if exit_flag:
+                gross = (exit_price - pos["entry_price"]) / pos["entry_price"]
+
+                # 4️⃣ 异常数据保护：超出合理范围的收益判定为数据异常，整笔交易作废，资金原样退回
+                is_abnormal = False
+                if np.isnan(gross) or np.isinf(gross):
+                    is_abnormal = True
+                elif abs(gross) > 2:  # 持有3天收益超过200%视为异常
+                    is_abnormal = True
                 
-                stock_code = file_name.split('#')[-1].replace('.txt', '')
-                
-                file_path = os.path.join(self.data_dir, file_name)
-                if file_name in self.data_cache:
-                    df = self.data_cache[file_name]
+                if is_abnormal:
+                    # 异常交易：资金原样退回，不计入收益
+                    cash += pos["invested"]
+                    abnormal_count += 1
                 else:
-                    df = self.load_stock_data(file_path)
-                    if df is not None:
-                        self.data_cache[file_name] = df
-                
-                if df is not None and len(df) > 120:
-                    result = self.run_strategy(df, stock_code, strategy_type)
-                    self.results.append(result)
+                    # 正常交易：计算收益
+                    trade_count += 1
+                    if not np.isnan(gross) and not np.isnan(pos["invested"]):
+                        cash += pos["invested"] * (1 + gross)
+                        # 记录股票收益率
+                        stock = pos["stock"]
+                        if stock not in stock_returns:
+                            stock_returns[stock] = []
+                        stock_returns[stock].append(gross)
+                        
+                        # 🔥 记录每年收益率
+                        year = current_date.year
+                        if year not in yearly_returns:
+                            yearly_returns[year] = []
+                        yearly_returns[year].append(gross)
+            else:
+                pos["current_price"] = close
+                new_positions.append(pos)
+
+        positions = new_positions
+
+        # 计算总权益
+        total_equity = cash if not np.isnan(cash) else 0
+        for pos in positions:
+            price_ratio = pos["current_price"] / pos["entry_price"]
+            # 防止价格比例异常
+            if np.isnan(price_ratio) or price_ratio <= 0:
+                price_ratio = 1.0
+            if not np.isnan(pos["invested"]):
+                total_equity += pos["invested"] * price_ratio
+
+        if np.isnan(total_equity):
+            stopped = True
+        elif total_equity <= 0:
+            stopped = True
             
-            self.print_summary(strategy_type)
+        if stopped:
+            equity_curve.append(total_equity)
+            break
+
+        equity_curve.append(total_equity)
+
+        if current_date not in daily_signals:
+            continue
+
+        available_slots = max_positions - len(positions)
+        if available_slots <= 0:
+            continue
+
+        signals_today = daily_signals[current_date]
+
+        existing_stocks = {pos["stock"] for pos in positions}
+        available_signals = [s for s in signals_today if s not in existing_stocks]
+
+        if not available_signals:
+            continue
+
+        # 防止资金不足或异常
+        if cash <= 0 or np.isnan(cash) or np.isinf(cash):
+            continue
+
+        # 每次投入固定金额
+        # 根据信号数量平均分配
+        num_to_buy = min(len(available_signals), available_slots)
+        
+        # 每只股票投入固定金额
+        fixed_invested = fixed_investment
+
+        count = 0
+        for stock in available_signals:
+            if count >= available_slots:
+                break
             
-            if self.results_file and self.results:
-                results_df = pd.DataFrame(self.results)
-                strategy_file = self.results_file.replace('.csv', f'_{strategy_type}.csv')
-                results_df.to_csv(strategy_file, index=False, encoding='utf-8-sig')
-                print(f"回测结果已保存到 {strategy_file}")
-        
-        self.print_strategy_comparison()
-        
-        return self.results
-    
-    def print_summary(self, strategy_type):
-        if not self.results:
-            print("没有回测结果")
-            return
-        
-        results_df = pd.DataFrame(self.results)
-        
-        total_stocks = len(results_df)
-        traded_stocks = len(results_df[results_df['num_trades'] > 0])
-        total_trades = results_df['num_trades'].sum()
-        total_profit = results_df['total_profit'].sum()
-        avg_profit_per_trade = total_profit / total_trades if total_trades > 0 else 0
-        profitable_stocks = len(results_df[results_df['total_profit'] > 0])
-        profitable_stocks_ratio = profitable_stocks / total_stocks if total_stocks > 0 else 0
-        avg_success_rate = results_df['success_rate'].mean()
-        avg_annual_return = results_df['annual_return'].mean()
-        max_annual_return = results_df['annual_return'].max() if not results_df.empty else 0
-        max_drawdown = results_df['max_drawdown'].max() if not results_df.empty else 0
-        avg_drawdown = results_df['avg_drawdown'].mean() if not results_df.empty else 0
-        max_consecutive_losses = results_df['max_consecutive_losses'].max() if not results_df.empty else 0
-        avg_consecutive_losses = results_df['avg_consecutive_losses'].mean() if not results_df.empty else 0
-        
-        print(f"\n回测总结 ({strategy_type}):")
-        print(f"总股票数: {total_stocks}")
-        print(f"有交易的股票数: {traded_stocks}")
-        print(f"总交易次数: {total_trades}")
-        print(f"总盈利: {total_profit:.4f}")
-        print(f"平均每笔交易盈利: {avg_profit_per_trade:.4f}")
-        print(f"盈利股票比例: {profitable_stocks_ratio:.2%}")
-        print(f"平均成功率: {avg_success_rate:.2%}")
-        print(f"平均年化收益率: {avg_annual_return:.4f}")
-        print(f"最大年化收益率: {max_annual_return:.4f}")
-        print(f"最大回撤: {max_drawdown:.4f}%")
-        print(f"平均回撤: {avg_drawdown:.4f}%")
-        print(f"最大连续失败次数: {max_consecutive_losses}")
-        print(f"平均连续失败次数: {avg_consecutive_losses:.2f}")
-        print(f"平均每天交易次数: {results_df['avg_daily_trades'].mean():.4f}")
-    
-    def print_strategy_comparison(self):
-        print(f"\n{'='*90}")
-        print("策略对比总结")
-        print(f"{'='*90}")
-        
-        all_results = {}
-        strategy_types = ['2%止盈', '3%止盈', '2天收盘卖', '3天开盘卖', '3天收盘卖']
-        
-        for strategy_type in strategy_types:
-            strategy_file = self.results_file.replace('.csv', f'_{strategy_type}.csv')
-            if os.path.exists(strategy_file):
-                df = pd.DataFrame(pd.read_csv(strategy_file))
-                all_results[strategy_type] = df
-        
-        print(f"{'策略名称':<15} {'成功率':<10} {'平均年化收益率':<16} {'最大年化收益率':<16} {'最大回撤':<12} {'平均回撤':<12} {'最大连续失败':<12} {'日均交易次数':<12}")
-        print("-" * 105)
-        
-        for strategy_type in strategy_types:
-            if strategy_type in all_results:
-                df = all_results[strategy_type]
-                avg_success_rate = df['success_rate'].mean()
-                avg_annual_return = df['annual_return'].mean()
-                max_annual_return = df['annual_return'].max()
-                max_drawdown = df['max_drawdown'].max()
-                avg_drawdown = df['avg_drawdown'].mean()
-                max_consecutive_losses = df['max_consecutive_losses'].max()
-                avg_daily_trades = df['avg_daily_trades'].mean()
+            # 1️⃣ 检查资金是否足够
+            if cash < fixed_invested:
+                break
+
+            df = stock_data[stock]
+            idx = df.index.get_loc(current_date)
+
+            if idx + 1 >= len(df):
+                continue
+
+            # 获取当天收盘价和明天开盘价，计算跳空幅度
+            today_close = df.iloc[idx]["CLOSE"]
+            entry_price = df.iloc[idx + 1]["OPEN"]
+
+            # 防止价格异常
+            if entry_price <= 0 or np.isnan(entry_price):
+                continue
+            if today_close <= 0 or np.isnan(today_close):
+                continue
                 
-                print(f"{strategy_type:<15} {avg_success_rate:>6.2%}    {avg_annual_return:>12.4f}    {max_annual_return:>12.4f}    {max_drawdown:>10.2f}%    {avg_drawdown:>10.2f}%    {max_consecutive_losses:>10}    {avg_daily_trades:>10.4f}")
+            # 跳空高开过滤：开盘价相对当天收盘价涨幅>=3%不买入
+            gap_up = (entry_price - today_close) / today_close
+            if gap_up >= 0.03:
+                continue
+
+            invested = fixed_invested
+
+            positions.append({
+                "stock": stock,
+                "entry_price": entry_price,
+                "entry_date": current_date,
+                "entry_idx": idx + 1,
+                "invested": invested,
+                "current_price": entry_price
+            })
+
+            cash -= invested
+            count += 1
+
+    equity_curve = np.array(equity_curve)
+
+    daily_returns = np.diff(equity_curve) / equity_curve[:-1]
+    daily_returns = daily_returns[np.isfinite(daily_returns)]
+
+    total_years = len(equity_curve) / 252
+    final_multiple = equity_curve[-1] / initial_capital
+    
+    # 2️⃣ CAGR 边界保护
+    if total_years <= 0 or final_multiple <= 0:
+        CAGR = -1.0
+    else:
+        CAGR = final_multiple ** (1 / total_years) - 1
+
+    running_max = np.maximum.accumulate(equity_curve)
+    
+    # 3️⃣ 防止 running_max = 0 导致除零
+    running_max_safe = np.where(running_max == 0, 1, running_max)
+    drawdowns = (equity_curve - running_max_safe) / running_max_safe
+    max_dd = np.min(drawdowns)
+
+    sharpe = 0
+    if np.std(daily_returns) > 0 and len(daily_returns) > 0:
+        sharpe = (np.mean(daily_returns) / np.std(daily_returns)) * np.sqrt(252)
+
+    print("\n" + "=" * 50)
+    print("砖型图策略回测结果（统一资金曲线版）")
+    print("=" * 50)
+    print(f"初始资金: {initial_capital:,.0f}")
+    print(f"最终资金: {equity_curve[-1]:,.2f}")
+    print(f"最终倍数: {final_multiple:.4f}")
+    print(f"年化收益率(CAGR): {CAGR:.4f}")
+    print(f"最大回撤: {max_dd:.4f}")
+    print(f"年化夏普: {sharpe:.4f}")
+    print(f"正常交易: {trade_count}, 异常交易: {abnormal_count}")
+
+    # 🔥 打印每年收益率分布
+    print("\n" + "=" * 50)
+    print("每年收益率分布")
+    print("=" * 50)
+    for year in sorted(yearly_returns.keys()):
+        returns = yearly_returns[year]
+        if returns:
+            avg_return = np.mean(returns) * 100
+            win_rate = np.mean([r > 0 for r in returns]) * 100
+            print(f"{year}年: 交易次数={len(returns)}, 平均收益率={avg_return:.2f}%, 胜率={win_rate:.1f}%")
+    
+    print("\n" + "=" * 50)
+    print("持有期间收益率分布统计")
+    print("=" * 50)
+    
+    all_trade_returns = []
+    for year_returns in yearly_returns.values():
+        all_trade_returns.extend(year_returns)
+    
+    if all_trade_returns:
+        returns_arr = np.array(all_trade_returns)
+        returns_pct = returns_arr * 100
+        
+        bins = [(-200, -10), (-10, -5), (-5, -2), (-2, 0), (0, 2), (2, 5), (5, 10), (10, 200)]
+        print(f"{'收益率区间':<15} {'交易次数':<10} {'占比':<10}")
+        print("-" * 35)
+        for low, high in bins:
+            count = np.sum((returns_pct >= low) & (returns_pct < high))
+            pct = count / len(returns_pct) * 100 if len(returns_pct) > 0 else 0
+            print(f"[{low:>5}%, {high:<5}%)    {count:<10} {pct:.2f}%")
+        
+        median_return = np.median(returns_arr) * 100
+        print(f"\n收益率中位数: {median_return:.2f}%")
+        print(f"平均收益率: {np.mean(returns_arr) * 100:.2f}%")
+        
+        if len(returns_arr) >= 2:
+            returns_sorted = np.sort(returns_arr)
+            print(f"25分位数: {returns_sorted[len(returns_arr)//4] * 100:.2f}%")
+            print(f"75分位数: {returns_sorted[len(returns_arr)*3//4] * 100:.2f}%")
+        
+        var_95 = np.percentile(returns_arr, 5) * 100
+        cvar_95 = returns_arr[returns_arr <= np.percentile(returns_arr, 5)].mean() * 100
+        print(f"VaR(95%): {var_95:.2f}%")
+        print(f"CVaR(95%): {cvar_95:.2f}%")
+        
+        print(f"\n最大盈利: {returns_arr.max() * 100:.2f}%")
+        print(f"最大亏损: {returns_arr.min() * 100:.2f}%")
+        print(f"收益标准差: {returns_arr.std() * 100:.2f}%")
+    
+    # 保存结果到文件
+    result_file = "/Users/lidongyang/Desktop/Qstrategy/utils/backtest/backtest_brick_strategy.txt"
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    new_content = f"========== {timestamp} ==========\n"
+    new_content += f"最终资金: {equity_curve[-1]:,.2f}\n"
+    new_content += f"最终倍数: {final_multiple:.4f}\n"
+    new_content += f"年化收益率(CAGR): {CAGR:.4f}\n"
+    new_content += f"最大回撤: {max_dd:.4f}\n"
+    new_content += f"年化夏普: {sharpe:.4f}\n"
+    new_content += f"正常交易: {trade_count}, 异常交易: {abnormal_count}\n"
+    new_content += "\n"
+    
+    # 读取现有内容，追加到后面
+    try:
+        with open(result_file, "r", encoding="utf-8") as f:
+            old_content = f.read()
+    except:
+        old_content = ""
+    
+    # 新内容写在最前面
+    with open(result_file, "w", encoding="utf-8") as f:
+        f.write(new_content + old_content)
+
+    # 计算每只股票的平均收益率
+    stock_avg_returns = {}
+    for stock, returns in stock_returns.items():
+        if returns:
+            stock_avg_returns[stock] = np.mean(returns)
+
+    # 排序
+    sorted_stocks = sorted(stock_avg_returns.items(), key=lambda x: x[1], reverse=True)
+
+    # 收益率最高的20只
+    print("\n" + "=" * 60)
+    print("收益率最高的20只股票:")
+    print("=" * 60)
+    print(f"{'股票代码':<20} {'平均收益率':<15}")
+    print("-" * 60)
+    for stock, avg_return in sorted_stocks[:20]:
+        print(f"{stock:<20} {avg_return*100:>10.2f}%")
+
+    # 收益率最低的20只
+    print("\n" + "=" * 60)
+    print("收益率最低的20只股票:")
+    print("=" * 60)
+    print(f"{'股票代码':<20} {'平均收益率':<15}")
+    print("-" * 60)
+    for stock, avg_return in sorted_stocks[-20:]:
+        print(f"{stock:<20} {avg_return*100:>10.2f}%")
+
+    print("=" * 50)
 
 
 if __name__ == "__main__":
-    data_dir = "/Users/lidongyang/Desktop/Qstrategy/data/20260226"
-    results_file = "/Users/lidongyang/Desktop/Qstrategy/backtest_brick_new_results.csv"
-    
-    backtest = BrickStrategyBacktest(data_dir, results_file)
-    backtest.run(test_mode=False)
+    data_dir = "/Users/lidongyang/Desktop/Qstrategy/data/forward_data"
+    run_backtest(data_dir)

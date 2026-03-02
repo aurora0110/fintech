@@ -380,7 +380,5 @@ def check(file_path, hold_list):
         else:
             return [-1]
 
-            
-
 
 
