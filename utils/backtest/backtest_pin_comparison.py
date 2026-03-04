@@ -9,6 +9,9 @@ from tqdm import tqdm
 
 STRATEGY_TYPE = "G"  # "A"=持有1天次日开盘卖, "B"=持有1天次日收盘卖, "C"=出现阴线次日开盘卖, "D"=出现阴线当天收盘卖, "E"=出现阴线次日收盘卖, "F"=出现阴线后次日次日开盘卖, "G"=出现阴线后次日次日收盘卖
 
+# MA均线多头排布过滤 (0=无限制, 1=MA20多头, 2=MA20+MA30多头, 3=MA20+MA30+MA60多头)
+MA_FILTER = 0
+
 # ===========================
 # 涨跌幅限制
 # ===========================
@@ -94,11 +97,41 @@ def calculate_trend(df):
     df['MA57'] = df['收盘'].rolling(57).mean()
     df['MA114'] = df['收盘'].rolling(114).mean()
 
+    df['MA5'] = df['收盘'].rolling(5).mean()
+    df['MA10'] = df['收盘'].rolling(10).mean()
+    df['MA20'] = df['收盘'].rolling(20).mean()
+    df['MA30'] = df['收盘'].rolling(30).mean()
+    df['MA60'] = df['收盘'].rolling(60).mean()
+
     df['知行多空线'] = (
         df['MA14'] + df['MA28'] + df['MA57'] + df['MA114']
     ) / 4
 
     return df
+
+
+def check_ma多头排布_simple(df, idx, ma_filter):
+    if ma_filter == 0:
+        return True
+    if idx < 1:
+        return True
+    
+    ma5 = df['MA5'].iloc[idx]
+    ma10 = df['MA10'].iloc[idx]
+    ma20 = df['MA20'].iloc[idx]
+    ma30 = df['MA30'].iloc[idx]
+    ma60 = df['MA60'].iloc[idx]
+    
+    if pd.isna(ma5) or pd.isna(ma10) or pd.isna(ma20) or pd.isna(ma30) or pd.isna(ma60):
+        return False
+    
+    if ma_filter == 1:
+        return ma5 > ma10 > ma20
+    elif ma_filter == 2:
+        return ma5 > ma10 > ma20 > ma30
+    elif ma_filter == 3:
+        return ma5 > ma10 > ma20 > ma30 > ma60
+    return True
 
 # ===========================
 # 加载数据
@@ -341,7 +374,8 @@ def run_backtest(data_dict):
                 buy_condition = (
                     row['PIN信号'] and
                     row['知行短期趋势线'] > row['知行多空线'] and
-                    row['收盘'] > row['知行多空线']
+                    row['收盘'] > row['知行多空线'] and
+                    check_ma多头排布_simple(df, idx, MA_FILTER)
                 )
 
                 if buy_condition:
@@ -428,12 +462,62 @@ def analyze_returns(trade_returns):
 # 主程序
 # ===========================
 
+def run_single_test(data_dict, ma_filter):
+    global MA_FILTER
+    MA_FILTER = ma_filter
+    trade_returns, trade_details = run_backtest(data_dict)
+    return trade_returns, trade_details
+
+
+def compare_results(data_dict):
+    print("\n" + "=" * 80)
+    print("不同MA均线多头排布条件对比")
+    print("=" * 80)
+    
+    filter_names = {
+        0: "无限制",
+        1: "MA5>MA10>MA20多头",
+        2: "MA5>MA10>MA20>MA30多头",
+        3: "MA5>MA10>MA20>MA30>MA60多头"
+    }
+    
+    results_summary = []
+    
+    for ma_filter in [0, 1, 2, 3]:
+        print(f"\n{'='*60}")
+        print(f"测试: {filter_names[ma_filter]} (MA_FILTER={ma_filter})")
+        print(f"{'='*60}")
+        
+        trade_returns, trade_details = run_single_test(data_dict, ma_filter)
+        analyze_returns(trade_returns)
+        
+        if len(trade_returns) > 0:
+            returns = np.array(trade_returns)
+            results_summary.append({
+                'filter': filter_names[ma_filter],
+                'ma_filter': ma_filter,
+                'total_trades': len(returns),
+                'win_rate': len(returns[returns > 0]) / len(returns) * 100,
+                'avg_return': returns.mean() * 100
+            })
+    
+    print("\n" + "=" * 80)
+    print("对比汇总表")
+    print("=" * 80)
+    print(f"{'过滤条件':<25} {'交易次数':<12} {'胜率':<12} {'平均收益':<12}")
+    print("-" * 60)
+    for r in results_summary:
+        print(f"{r['filter']:<25} {r['total_trades']:<12} {r['win_rate']:.2f}%     {r['avg_return']:.2f}%")
+    
+    return results_summary
+
+
 if __name__ == "__main__":
 
-    data_dir = "/Users/lidongyang/Desktop/Qstrategy/data/forward_data"
-
+    data_dir = r"c:\Users\lidon\Desktop\Qstrategy\data\20260207\normal"
+    
+    print("加载数据中...")
     data_dict = load_all_data(data_dir)
-
-    trade_returns, trade_details = run_backtest(data_dict)
-
-    analyze_returns(trade_returns)
+    print(f"加载完成，共 {len(data_dict)} 个股票")
+    
+    compare_results(data_dict)
