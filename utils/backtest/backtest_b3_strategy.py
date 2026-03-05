@@ -83,7 +83,7 @@ def check_b3_signal(df, idx):
 
 
 def run_backtest(data_dir, hold_days_list, stop_loss_pct=0.05, take_profit_list=None, desc=""):
-    initial_capital = 1000000
+    initial_capital = 100000000
     fee_rate = 0.0003
     slippage = 0.001
     
@@ -141,6 +141,11 @@ def run_backtest(data_dir, hold_days_list, stop_loss_pct=0.05, take_profit_list=
         except Exception as e:
             continue
     
+    print(f"成功加载 {loaded_count} 只股票")
+    
+    total_signals = sum(len(v) for v in daily_signals.values())
+    print(f"共生成 {total_signals} 个买入信号")
+    
     all_dates = []
     for df in stock_data.values():
         all_dates.extend(df.index.tolist())
@@ -152,6 +157,7 @@ def run_backtest(data_dir, hold_days_list, stop_loss_pct=0.05, take_profit_list=
     
     for hold_days in hold_days_list:
         cash = float(initial_capital)
+        total_value = float(initial_capital)
         positions = []
         equity_curve = []
         
@@ -242,13 +248,13 @@ def run_backtest(data_dir, hold_days_list, stop_loss_pct=0.05, take_profit_list=
             
             positions = new_positions
             
-            if current_date in pending_buy_signals and positions == []:
+            if current_date in pending_buy_signals:
                 candidates = pending_buy_signals[current_date]
                 
-                if candidates:
-                    stock = candidates[0][0]
-                    details = candidates[0][1]
-                    signal_low = candidates[0][2]
+                for candidate in candidates:
+                    stock = candidate[0]
+                    details = candidate[1]
+                    signal_low = candidate[2]
                     df = stock_data[stock]
                     
                     if current_date not in df.index:
@@ -263,7 +269,8 @@ def run_backtest(data_dir, hold_days_list, stop_loss_pct=0.05, take_profit_list=
                     entry_low = row['LOW']
                     stop_loss_price = min(entry_low, signal_low) * (1 - stop_loss_pct)
                     
-                    shares = int(cash / open_price / 100) * 100
+                    allocation = initial_capital * 0.01
+                    shares = int(allocation / open_price / 100) * 100
                     if shares > 0:
                         cost = shares * open_price * (1 + fee_rate + slippage)
                         if cost <= cash:
@@ -279,15 +286,15 @@ def run_backtest(data_dir, hold_days_list, stop_loss_pct=0.05, take_profit_list=
                                 'target_price': open_price * (1 + stop_loss_pct)
                             })
             
-            total_value = cash
+            current_total = cash
             for pos in positions:
                 stock = pos['stock']
                 df = stock_data[stock]
                 if current_date in df.index:
                     current_price = df.loc[current_date]['CLOSE']
-                    total_value += pos['shares'] * current_price
+                    current_total += pos['shares'] * current_price
             
-            equity_curve.append(total_value)
+            equity_curve.append(current_total)
         
         if len(equity_curve) < 2:
             continue
@@ -326,7 +333,7 @@ def run_backtest(data_dir, hold_days_list, stop_loss_pct=0.05, take_profit_list=
 
 
 def run_backtest_take_profit(data_dir, take_profit_pct, stop_loss_pct=0.05, desc=""):
-    initial_capital = 1000000
+    initial_capital = 100000000
     fee_rate = 0.0003
     slippage = 0.001
     
@@ -389,6 +396,7 @@ def run_backtest_take_profit(data_dir, take_profit_pct, stop_loss_pct=0.05, desc
     date_to_idx = {date: idx for idx, date in enumerate(all_dates)}
     
     cash = float(initial_capital)
+    total_value = float(initial_capital)
     positions = []
     equity_curve = []
     
@@ -474,13 +482,13 @@ def run_backtest_take_profit(data_dir, take_profit_pct, stop_loss_pct=0.05, desc
         
         positions = new_positions
         
-        if current_date in pending_buy_signals and positions == []:
+        if current_date in pending_buy_signals:
             candidates = pending_buy_signals[current_date]
             
-            if candidates:
-                stock = candidates[0][0]
-                details = candidates[0][1]
-                signal_low = candidates[0][2]
+            for candidate in candidates:
+                stock = candidate[0]
+                details = candidate[1]
+                signal_low = candidate[2]
                 df = stock_data[stock]
                 
                 if current_date not in df.index:
@@ -496,7 +504,8 @@ def run_backtest_take_profit(data_dir, take_profit_pct, stop_loss_pct=0.05, desc
                 stop_loss_price = min(entry_low, signal_low) * (1 - stop_loss_pct)
                 target_price = open_price * (1 + take_profit_pct)
                 
-                shares = int(cash / open_price / 100) * 100
+                allocation = initial_capital * 0.01
+                shares = int(allocation / open_price / 100) * 100
                 if shares > 0:
                     cost = shares * open_price * (1 + fee_rate + slippage)
                     if cost <= cash:
@@ -512,15 +521,15 @@ def run_backtest_take_profit(data_dir, take_profit_pct, stop_loss_pct=0.05, desc
                             'target_price': target_price
                         })
         
-        total_value = cash
+        current_total = cash
         for pos in positions:
             stock = pos['stock']
             df = stock_data[stock]
             if current_date in df.index:
                 current_price = df.loc[current_date]['CLOSE']
-                total_value += pos['shares'] * current_price
+                current_total += pos['shares'] * current_price
         
-        equity_curve.append(total_value)
+        equity_curve.append(current_total)
     
     if len(equity_curve) < 2:
         return None
