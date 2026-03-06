@@ -2,6 +2,88 @@ from re import M
 import pandas as pd
 import numpy as np
 
+PRICE_COLUMNS = ['日期', '开盘', '最高', '最低', '收盘', '成交量', '成交额']
+
+
+def _empty_price_df():
+    return pd.DataFrame(columns=PRICE_COLUMNS)
+
+
+def _load_price_data(file_path):
+    """加载通达信导出的日线 txt 文件，返回标准价格列 DataFrame。"""
+    numeric_cols = ['开盘', '最高', '最低', '收盘', '成交量', '成交额']
+    encodings = ['gbk', 'gb2312', 'utf-8', 'latin-1']
+    lines = None
+
+    for encoding in encodings:
+        try:
+            with open(file_path, 'r', encoding=encoding) as f:
+                lines = [line.strip() for line in f.readlines() if line.strip()]
+            break
+        except (UnicodeDecodeError, FileNotFoundError, OSError):
+            continue
+
+    if lines is None:
+        return _empty_price_df()
+
+    data_rows = []
+    for line in lines:
+        if any(keyword in line for keyword in ['日期', '开盘', '最高', '最低', '收盘', '成交量', '成交额']):
+            continue
+
+        clean_line = ' '.join(line.split())
+        parts = clean_line.split(' ')
+        if len(parts) != 7:
+            continue
+        if '/' not in parts[0] or len(parts[0].split('/')) != 3:
+            continue
+        data_rows.append(parts)
+
+    if not data_rows:
+        return _empty_price_df()
+
+    df = pd.DataFrame(data_rows, columns=PRICE_COLUMNS)
+    for col in numeric_cols:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    df['日期'] = pd.to_datetime(df['日期'], format='%Y/%m/%d', errors='coerce')
+    df = df.dropna(subset=['日期', '开盘', '最高', '最低', '收盘'])
+    if df.empty:
+        return _empty_price_df()
+
+    df = df[PRICE_COLUMNS].sort_values('日期').drop_duplicates(subset=['日期'], keep='last').reset_index(drop=True)
+    return df
+
+
+def calculate_week_price(file_path):
+    """
+    将通达信日线 txt 数据聚合为周线数据。
+    :param file_path: 日线 txt 文件路径
+    :return: 周线 DataFrame，列格式与原始数据一致
+    """
+    df = _load_price_data(file_path)
+    if df.empty:
+        return _empty_price_df()
+
+    weekly_df = (
+        df.groupby(pd.Grouper(key='日期', freq='W-FRI'))
+        .agg({
+            '日期': 'max',
+            '开盘': 'first',
+            '最高': 'max',
+            '最低': 'min',
+            '收盘': 'last',
+            '成交量': 'sum',
+            '成交额': 'sum',
+        })
+        .dropna(subset=['日期', '开盘', '收盘'])
+        .reset_index(drop=True)
+    )
+
+    weekly_df = weekly_df[['日期', '开盘', '最高', '最低', '收盘', '成交量', '成交额']]
+    return weekly_df.sort_values('日期').reset_index(drop=True)
+
+
 def calculate_trend(df, N=9, M1=14, M2=28, M3=57, M4=114):
     """
     计算短期趋势线和多空线

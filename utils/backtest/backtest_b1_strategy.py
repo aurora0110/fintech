@@ -5,6 +5,355 @@ import datetime
 import pickle
 
 
+# ==================== 增强功能配置参数 ====================
+
+REBALANCE_CONFIG = {
+    'enabled': False,
+    'period': 'monthly',
+    'top_n': 10,
+    'force_rebalance': True,
+}
+
+MULTI_START_CONFIG = {
+    'enabled': False,
+    'start_dates': ['2022-01-01', '2023-01-01', '2024-01-01'],
+}
+
+ROLLING_WINDOW_CONFIG = {
+    'enabled': False,
+    'window_years': 2,
+    'frequency': 'monthly',
+}
+
+TURNOVER_CONFIG = {
+    'enabled': True,
+}
+
+
+# ==================== 增强功能函数 ====================
+
+def get_rebalance_dates(all_dates, period='monthly'):
+    """生成调仓日期列表"""
+    dates = pd.to_datetime(all_dates)
+    rebalance_dates = []
+    
+    if period == 'monthly':
+        df_dates = pd.DataFrame({'date': dates})
+        df_dates['month'] = df_dates['date'].dt.to_period('M')
+        rebalance_dates = df_dates.groupby('month').first()['date'].tolist()
+    elif period == '20d':
+        for i in range(0, len(dates), 20):
+            if i < len(dates):
+                rebalance_dates.append(dates[i])
+    elif period == '5d':
+        for i in range(0, len(dates), 5):
+            if i < len(dates):
+                rebalance_dates.append(dates[i])
+    elif period.endswith('d'):
+        interval = int(period.replace('d', ''))
+        for i in range(0, len(dates), interval):
+            if i < len(dates):
+                rebalance_dates.append(dates[i])
+    
+    return [d for d in rebalance_dates if d in all_dates]
+
+
+def calculate_b1_factor_scores(stock_data, current_date, use_bullish_ma=False):
+    """计算B1策略因子得分"""
+    scores = {}
+    
+    for stock_code, df in stock_data.items():
+        if current_date not in df.index:
+            continue
+        
+        try:
+            idx = df.index.get_loc(current_date)
+        except KeyError:
+            continue
+        
+        if idx < 2:
+            continue
+        
+        row = df.iloc[idx]
+        
+        if pd.isna(row['J']):
+            continue
+        
+        if row['J'] >= -5:
+            continue
+        
+        if use_bullish_ma:
+            ma5 = row.get('MA5')
+            ma10 = row.get('MA10')
+            ma30 = row.get('MA30')
+            close = row.get('CLOSE')
+            if any(pd.isna(x) for x in [ma5, ma10, ma30, close]):
+                continue
+            if not (ma5 > ma10 > ma30 and close > ma30):
+                continue
+        
+        score = max(1, (-row['J'] - 5) / 10)
+        scores[stock_code] = score
+    
+    return scores
+
+
+def run_rebalance_backtest_b1(stock_data, all_dates, use_bullish_ma, rebalance_config, turnover_config):
+    """带强制调仓的B1策略回测"""
+    max_positions = rebalance_config.get('top_n', 10)
+    rebalance_dates = get_rebalance_dates(all_dates, rebalance_config.get('period', 'monthly'))
+    
+    initial_capital = 1000000
+    fee_rate = 0.0003
+    slippage = 0.001
+    
+    cash = float(initial_capital)
+    positions = {}
+    equity_curve = []
+    
+    turnover_records = []
+    rebalance_count = 0
+    
+    pending_signals = {}
+    
+    for i, current_date in enumerate(all_dates):
+        if rebalance_config.get('enabled') and current_date in rebalance_dates:
+            scores = calculate_b1_factor_scores(stock_data, current_date, use_bullish_ma)
+            pending_signals[current_date] = scores
+        
+        if i > 0 and all_dates[i-1] in pending_signals:
+            exec_date = all_dates[i-1]
+            scores = pending_signals[exec_date]
+            
+            sorted_stocks = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+            target_stocks = [s[0] for s in sorted_stocks[:max_positions]]
+            
+            current_value = cash + sum([pos['shares'] * stock_data[pos['stock']].loc[exec_date, 'CLOSE'] 
+                                      if pos['stock'] in stock_data and exec_date in stock_data[pos['stock']].index
+                                      and not pd.isna(stock_data[pos['stock']].loc[exec_date, 'CLOSE'])
+                                      else 0 for pos in positions.values()])
+            
+            sell_value = 0
+            buy_value = 0
+            stocks_to_sell = [s for s in positions.keys() if s not in target_stocks]
+            for stock in stocks_to_sell:
+                if stock in stock_data and exec_date in stock_data[stock].index:
+                    price = stock_data[stock].loc[exec_date, 'CLOSE']
+                    if price > 0 and stock in positions:
+                        shares = positions[stock]['shares']
+                        proceeds = shares * price * (1 - fee_rate - slippage)
+                        sell_value += proceeds
+                        cash += proceeds
+                        del positions[stock]
+            
+            total_after_sell = cash + sum([pos['shares'] * stock_data[pos['stock']].loc[exec_date, 'CLOSE'] 
+                                         if pos['stock'] in stock_data and exec_date in stock_data[pos['stock']].index
+                                         and not pd.isna(stock_data[pos['stock']].loc[exec_date, 'CLOSE'])
+                                         else 0 for pos in positions.values()])
+            
+            stocks_to_buy = [s for s in target_stocks if s not in positions]
+            target_prices = {}
+            for stock in stocks_to_buy:
+                if stock in stock_data and current_date in stock_data[stock].index:
+                    price = stock_data[stock].loc[current_date, 'OPEN']
+                    if price > 0:
+                        target_prices[stock] = price
+            
+            scale_factor = 1.0
+            if stocks_to_buy:
+                needed_cash = sum([target_prices.get(s, 0) * int(total_after_sell / len(stocks_to_buy) / max(target_prices.get(s, 1), 1) / 100) * 100 
+                                 for s in stocks_to_buy if s in target_prices])
+                if needed_cash > cash and needed_cash > 0:
+                    scale_factor = cash / needed_cash * 0.95
+            
+            target_value_per_stock = (total_after_sell * scale_factor) / max_positions
+            
+            for stock in stocks_to_buy:
+                if stock not in target_prices:
+                    continue
+                price = target_prices[stock]
+                
+                shares = int(target_value_per_stock / price / 100) * 100
+                if shares > 0:
+                    cost = shares * price * (1 + fee_rate + slippage)
+                    if cost <= cash:
+                        cash -= cost
+                        buy_value += cost
+                        positions[stock] = {
+                            'stock': stock,
+                            'shares': shares,
+                            'entry_price': price,
+                            'entry_date': current_date
+                        }
+            
+            while len(positions) < max_positions and stocks_to_buy:
+                remaining_stocks = [s for s in target_stocks if s not in positions]
+                if not remaining_stocks:
+                    break
+                next_stock = remaining_stocks[0]
+                if next_stock in target_prices:
+                    price = target_prices[next_stock]
+                    shares = int(target_value_per_stock / price / 100) * 100
+                    if shares > 0:
+                        cost = shares * price * (1 + fee_rate + slippage)
+                        if cost <= cash:
+                            cash -= cost
+                            buy_value += cost
+                            positions[next_stock] = {
+                                'stock': next_stock,
+                                'shares': shares,
+                                'entry_price': price,
+                                'entry_date': current_date
+                            }
+                stocks_to_buy.remove(next_stock)
+            
+            if turnover_config.get('enabled') and current_value > 0:
+                turnover = (sell_value + buy_value) / current_value
+                turnover_records.append(turnover)
+            
+            if sell_value + buy_value > 0:
+                rebalance_count += 1
+        
+        total_value = cash
+        for stock, pos in positions.items():
+            if stock in stock_data and current_date in stock_data[stock].index:
+                price = stock_data[stock].loc[current_date, 'CLOSE']
+                if not pd.isna(price) and price > 0:
+                    total_value += pos['shares'] * price
+        
+        equity_curve.append(total_value)
+    
+    if len(equity_curve) < 2:
+        return None
+    
+    final_multiple = equity_curve[-1] / initial_capital
+    returns_arr = np.array([(equity_curve[i+1] - equity_curve[i]) / equity_curve[i] 
+                           for i in range(len(equity_curve)-1) if equity_curve[i] > 0])
+    
+    sharpe = returns_arr.mean() / returns_arr.std() * np.sqrt(252) if returns_arr.std() > 0 else 0
+    
+    years = len(all_dates) / 252
+    CAGR = (final_multiple ** (1 / years)) - 1 if years > 0 and final_multiple > 0 else -1
+    
+    equity_arr = np.array(equity_curve)
+    running_max = np.maximum.accumulate(equity_arr)
+    drawdown = (equity_arr - running_max) / running_max
+    max_dd = drawdown.min()
+    
+    avg_turnover = np.mean(turnover_records) if turnover_records else 0
+    
+    return {
+        'desc': f'强制调仓: {rebalance_config.get("period")}',
+        'trade_count': rebalance_count,
+        'CAGR': CAGR * 100,
+        'final_multiple': final_multiple,
+        'max_dd': max_dd * 100,
+        'sharpe': sharpe,
+        'turnover': avg_turnover,
+        'rebalance_count': rebalance_count,
+    }
+
+
+def run_multi_start_backtest_b1(stock_data, all_dates, config, use_bullish_ma):
+    """B1策略多起点回测"""
+    results = []
+    
+    for start_date_str in config.get('start_dates', []):
+        start_date = pd.to_datetime(start_date_str)
+        valid_dates = [d for d in all_dates if d >= start_date]
+        if not valid_dates:
+            continue
+        
+        start_date = valid_dates[0]
+        
+        if len(valid_dates) < 60:
+            continue
+        
+        result = run_rebalance_backtest_b1(
+            stock_data, valid_dates, use_bullish_ma,
+            {'enabled': True, 'period': config.get('period', 'monthly'), 'top_n': config.get('top_n', 10)},
+            {'enabled': True}
+        )
+        
+        if result:
+            result['start_date'] = start_date
+            results.append(result)
+    
+    if not results:
+        return None
+    
+    returns = [r['CAGR'] for r in results]
+    sharpes = [r['sharpe'] for r in results]
+    max_dds = [r['max_dd'] for r in results]
+    
+    return {
+        'results': results,
+        'summary': {
+            'avg_annual_return': np.mean(returns),
+            'std_annual_return': np.std(returns),
+            'min_annual_return': np.min(returns),
+            'max_annual_return': np.max(returns),
+            'avg_sharpe': np.mean(sharpes),
+            'avg_max_dd': np.mean(max_dds),
+            'count': len(results)
+        }
+    }
+
+
+def run_rolling_window_test_b1(stock_data, all_dates, config, use_bullish_ma):
+    """B1策略滚动窗口测试"""
+    window_years = config.get('window_years', 2)
+    frequency = config.get('frequency', 'monthly')
+    window_days = window_years * 252
+    results = []
+    
+    if frequency == 'monthly':
+        df_dates = pd.DataFrame({'date': all_dates})
+        df_dates['month'] = df_dates['date'].dt.to_period('M')
+        start_indices = df_dates.groupby('month').first().index
+        start_dates = [all_dates[i] for i in range(len(all_dates)) 
+                     if i in start_indices or (i > 0 and df_dates.iloc[i]['month'] != df_dates.iloc[i-1]['month'])]
+    else:
+        start_dates = all_dates[::20]
+    
+    for start_date in start_dates:
+        start_idx = all_dates.index(start_date)
+        end_idx = start_idx + window_days
+        
+        if end_idx >= len(all_dates):
+            continue
+        
+        window_dates = all_dates[start_idx:end_idx]
+        
+        result = run_rebalance_backtest_b1(
+            stock_data, window_dates, use_bullish_ma,
+            {'enabled': True, 'period': config.get('period', 'monthly'), 'top_n': config.get('top_n', 10)},
+            {'enabled': True}
+        )
+        
+        if result:
+            result['start_date'] = start_date
+            result['end_date'] = window_dates[-1]
+            results.append(result)
+    
+    if not results:
+        return None
+    
+    returns = [r['CAGR'] for r in results]
+    
+    return {
+        'results': results,
+        'distribution': {
+            'mean': np.mean(returns),
+            'std': np.std(returns),
+            'min': np.min(returns),
+            'max': np.max(returns),
+            'median': np.median(returns),
+            'count': len(results)
+        }
+    }
+
+
 def write_log(content):
     script_path = os.path.abspath(__file__)
     script_dir = os.path.dirname(script_path)
@@ -336,6 +685,10 @@ def run_backtest(data_dir, min_score=0.5, use_bullish_ma=False, desc=""):
                 pending_buy_signals[next_date] = []
             pending_buy_signals[next_date].extend(daily_scores[date])
     
+    pending_exit_signals = {}
+    first_trade_date = None
+    last_trade_date = None
+    
     for current_date in all_dates:
         if stopped:
             break
@@ -380,27 +733,50 @@ def run_backtest(data_dir, min_score=0.5, use_bullish_ma=False, desc=""):
             exit_price = None
             exit_reason = ""
             
-            # 止损：后续交易日收盘价低于买入当日最低价的95%，则在次日以开盘价卖出
-            if close < stop_price and not pos.get('stop_triggered', False):
-                pos['stop_triggered'] = True
-            
-            if pos.get('stop_triggered', False):
+            if current_date in pending_exit_signals and stock in pending_exit_signals[current_date]:
                 exit_flag = True
-                exit_price = open_p
-                exit_reason = "止损"
-            
-            # 到期卖出：持有3/5/10/20/30天后卖出
-            exit_days = [3, 5, 10, 20, 30]
-            if not exit_flag and holding_days in exit_days:
-                exit_flag = True
-                exit_price = close  # 当日收盘价卖出
-                exit_reason = f"到期{holding_days}日卖出"
+                exit_info = pending_exit_signals[current_date][stock]
+                exit_price = exit_info['exit_price']
+                exit_reason = exit_info['exit_reason']
+            elif not pos.get('exit_marked', False):
+                if close < stop_price:
+                    if current_idx + 1 < len(all_dates):
+                        next_day = all_dates[current_idx + 1]
+                        if next_day not in pending_exit_signals:
+                            pending_exit_signals[next_day] = {}
+                        pending_exit_signals[next_day][stock] = {
+                            'exit_price': row['OPEN'],
+                            'exit_reason': '止损'
+                        }
+                        pos['exit_marked'] = True
+                
+                exit_days = [3, 5, 10, 20, 30]
+                if holding_days in exit_days:
+                    if current_idx + 1 < len(all_dates):
+                        next_day = all_dates[current_idx + 1]
+                        if next_day not in pending_exit_signals:
+                            pending_exit_signals[next_day] = {}
+                        pending_exit_signals[next_day][stock] = {
+                            'exit_price': row['OPEN'],
+                            'exit_reason': f'到期{holding_days}日卖出'
+                        }
+                        pos['exit_marked'] = True
             
             if exit_flag:
-                sell_value = pos['shares'] * exit_price * (1 - fee_rate - slippage)
+                sell_price = exit_price
+                
+                prev_row = df.iloc[current_idx - 1] if current_idx > 0 else None
+                if prev_row is not None and 'limit_pct' in df.columns:
+                    prev_close = prev_row['CLOSE']
+                    if prev_close > 0:
+                        limit_down = prev_close * (1 - df.iloc[current_idx]['limit_pct'])
+                        if sell_price <= limit_down:
+                            sell_price = limit_down
+                
+                sell_value = pos['shares'] * sell_price * (1 - fee_rate - slippage)
                 cash += sell_value
                 
-                pnl = (exit_price - entry_price) / entry_price
+                pnl = (sell_price - entry_price) / entry_price
                 trade_count += 1
                 holding_returns.append(pnl)
                 
@@ -469,6 +845,17 @@ def run_backtest(data_dir, min_score=0.5, use_bullish_ma=False, desc=""):
                 # 全仓交易，使用最低价的0.95作为止损
                 stop_loss = row['LOW'] * 0.95
                 
+                prev_row = df.iloc[current_idx - 1] if current_idx > 0 else None
+                limit_up = None
+                limit_down = None
+                if prev_row is not None and 'limit_pct' in df.columns:
+                    prev_close = prev_row['CLOSE']
+                    if prev_close > 0:
+                        limit_up = prev_close * (1 + df.iloc[current_idx]['limit_pct'])
+                        limit_down = prev_close * (1 - df.iloc[current_idx]['limit_pct'])
+                        if open_price >= limit_up:
+                            continue
+                
                 shares = int(cash / open_price / 100) * 100
                 if shares > 0:
                     cost = shares * open_price * (1 + fee_rate + slippage)
@@ -484,9 +871,21 @@ def run_backtest(data_dir, min_score=0.5, use_bullish_ma=False, desc=""):
                             'entry_idx': current_idx
                         })
         
-        total_value = cash + sum([pos['shares'] * stock_data[pos['stock']].loc[current_date, 'CLOSE'] 
-                                  if current_date in stock_data[pos['stock']].index and not pd.isna(stock_data[pos['stock']].loc[current_date, 'CLOSE'])
-                                  else 0 for pos in positions])
+        position_value = 0
+        for pos in positions:
+            stock = pos['stock']
+            if stock in stock_data and current_date in stock_data[stock].index:
+                price = stock_data[stock].loc[current_date, 'CLOSE']
+                if pd.isna(price) or price <= 0:
+                    df_s = stock_data[stock]
+                    valid_prices = df_s.loc[:current_date]['CLOSE']
+                    valid_prices = valid_prices[valid_prices > 0]
+                    if len(valid_prices) > 0:
+                        price = valid_prices.iloc[-1]
+                if price > 0:
+                    position_value += pos['shares'] * price
+        
+        total_value = cash + position_value
         equity_curve.append(total_value)
         
         year = current_date.year
@@ -495,6 +894,10 @@ def run_backtest(data_dir, min_score=0.5, use_bullish_ma=False, desc=""):
         if len(equity_curve) > 1:
             daily_return = (equity_curve[-1] - equity_curve[-2]) / equity_curve[-2]
             yearly_returns[year].append(daily_return)
+        
+        if positions and first_trade_date is None:
+            first_trade_date = current_date
+        last_trade_date = current_date
     
     final_multiple = equity_curve[-1] / initial_capital if equity_curve else 1
     returns_arr = np.array([(equity_curve[i+1] - equity_curve[i]) / equity_curve[i] 
@@ -505,11 +908,16 @@ def run_backtest(data_dir, min_score=0.5, use_bullish_ma=False, desc=""):
     else:
         sharpe = 0
     
-    years = len(all_dates) / 252
+    if first_trade_date and last_trade_date:
+        years = (last_trade_date - first_trade_date).days / 365.25
+        years = max(years, 0.01)
+    else:
+        years = len(all_dates) / 252
+    
     if years > 0 and final_multiple > 0:
         CAGR = (final_multiple ** (1 / years)) - 1
     else:
-        CAGR = -1  # 当最终倍数为负值时，返回-1表示完全亏损
+        CAGR = -1
     
     equity_arr = np.array(equity_curve)
     running_max = np.maximum.accumulate(equity_arr)
