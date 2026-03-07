@@ -1,89 +1,131 @@
+from __future__ import annotations
+
+from typing import Dict
+
 import pandas as pd
-import numpy as np
-from typing import Dict, List, Tuple
-from forward_selector import backtest_factors
-import warnings
-warnings.filterwarnings('ignore')
 
-def random_weight_search(df: pd.DataFrame, factor_list: List[str], 
-                        n_samples: int = 2000, top_k: int = 10) -> Tuple[Dict, pd.DataFrame]:
-    print(f"\n{'='*60}")
-    print("阶段四：权重随机优化")
-    print(f"{'='*60}")
-    
-    results = []
-    
-    for _ in range(n_samples):
-        weights = np.random.dirichlet(np.ones(len(factor_list)))
-        weight_dict = {f: w for f, w in zip(factor_list, weights)}
-        
-        result = backtest_factors(df, factor_list, weight_dict, top_k=top_k)
-        
-        results.append({
-            'weights': weight_dict,
-            'sharpe': result['sharpe'],
-            'annual_return': result['annual_return'],
-            'total_trades': result['total_trades'],
-            'win_rate': result['win_rate']
-        })
-    
-    results_df = pd.DataFrame(results)
-    results_df = results_df.sort_values('sharpe', ascending=False)
-    
-    top_10_pct = results_df.head(int(n_samples * 0.1))
-    best_weights = top_10_pct.iloc[0]['weights']
-    
-    print(f"随机搜索 {n_samples} 组权重")
-    print(f"最优 Sharpe: {results_df.iloc[0]['sharpe']:.4f}")
-    print(f"Top 10% 平均 Sharpe: {top_10_pct['sharpe'].mean():.4f}")
-    
-    return best_weights, results_df
+from utils.multi_factor_research.factor_calculator import FACTOR_COLUMNS, PENALTY_COLUMNS
 
-def perturb_weight_test(df: pd.DataFrame, factor_list: List[str], 
-                       base_weights: Dict, top_k: int = 10,
-                       perturb_range: float = 0.1) -> Dict:
-    print(f"\n权重扰动测试...")
-    
-    best_sharpe = -999
-    best_weights = base_weights.copy()
-    
-    for f in factor_list:
-        for direction in [-1, 1]:
-            test_weights = base_weights.copy()
-            test_weights[f] = base_weights[f] * (1 + direction * perturb_range)
-            
-            total_w = sum(test_weights.values())
-            test_weights = {k: v/total_w for k, v in test_weights.items()}
-            
-            result = backtest_factors(df, factor_list, test_weights, top_k=top_k)
-            
-            if result['sharpe'] > best_sharpe:
-                best_sharpe = result['sharpe']
-                best_weights = test_weights.copy()
-    
-    print(f"扰动后最优 Sharpe: {best_sharpe:.4f}")
-    
-    return best_weights
 
-def optimize_weights(df: pd.DataFrame, factor_list: List[str], 
-                   top_k: int = 10, n_samples: int = 2000) -> Dict:
-    best_weights, results_df = random_weight_search(df, factor_list, n_samples, top_k)
-    
-    final_weights = perturb_weight_test(df, factor_list, best_weights, top_k)
-    
-    print(f"\n最优权重:")
-    for f, w in sorted(final_weights.items(), key=lambda x: -x[1]):
-        print(f"  {f}: {w:.4f}")
-    
-    return final_weights, results_df
+PENALTY_WEIGHTS = {
+    "bearish_volume_penalty": 0.08,
+    "break_trend_penalty": 0.10,
+    "break_bull_bear_penalty": 0.12,
+    "bull_bear_above_trend_penalty": 0.10,
+    "bearish_candle_dominance_penalty": 0.06,
+    "extreme_bull_run_penalty": 0.06,
+    "high_overbought_penalty": 0.04,
+    "abnormal_amplitude_penalty": 0.03,
+    "volume_stagnation_penalty": 0.03,
+    "key_k_close_break_penalty": 0.04,
+    "key_k_low_break_penalty": 0.06,
+}
 
-if __name__ == "__main__":
-    from data_processor import prepare_data
-    from factor_calculator import calculate_all_factors
-    
-    df = prepare_data()
-    df = calculate_all_factors(df)
-    factor_list = ['factor_1a', 'factor_2', 'factor_11']
-    
-    weights, results = optimize_weights(df, factor_list)
-    print(f"\n最终权重: {weights}")
+
+def analyze_factor_contributions(dataset: pd.DataFrame) -> pd.DataFrame:
+    if dataset.empty:
+        return pd.DataFrame(
+            columns=[
+                "factor",
+                "coverage",
+                "active_samples",
+                "mean_return_active",
+                "mean_return_inactive",
+                "return_lift",
+                "win_rate_active",
+                "win_rate_inactive",
+                "success_lift",
+                "return_contribution",
+                "success_contribution",
+                "combined_contribution",
+            ]
+        )
+
+    baseline_return = float(dataset["return_pct"].mean())
+    baseline_success = float(dataset["success"].mean())
+    rows = []
+    for factor in FACTOR_COLUMNS:
+        active_mask = dataset[factor] > 0
+        active = dataset.loc[active_mask]
+        inactive = dataset.loc[~active_mask]
+        if active.empty:
+            rows.append(
+                {
+                    "factor": factor,
+                    "coverage": 0.0,
+                    "active_samples": 0,
+                    "mean_return_active": 0.0,
+                    "mean_return_inactive": baseline_return,
+                    "return_lift": 0.0,
+                    "win_rate_active": 0.0,
+                    "win_rate_inactive": baseline_success,
+                    "success_lift": 0.0,
+                    "return_contribution": 0.0,
+                    "success_contribution": 0.0,
+                    "combined_contribution": 0.0,
+                }
+            )
+            continue
+
+        mean_return_active = float(active["return_pct"].mean())
+        mean_return_inactive = float(inactive["return_pct"].mean()) if not inactive.empty else baseline_return
+        win_rate_active = float(active["success"].mean())
+        win_rate_inactive = float(inactive["success"].mean()) if not inactive.empty else baseline_success
+        coverage = float(active_mask.mean())
+        return_lift = mean_return_active - mean_return_inactive
+        success_lift = win_rate_active - win_rate_inactive
+        return_contribution = max(return_lift, 0.0) * coverage
+        success_contribution = max(success_lift, 0.0) * coverage
+        rows.append(
+            {
+                "factor": factor,
+                "coverage": coverage,
+                "active_samples": int(active_mask.sum()),
+                "mean_return_active": mean_return_active,
+                "mean_return_inactive": mean_return_inactive,
+                "return_lift": return_lift,
+                "win_rate_active": win_rate_active,
+                "win_rate_inactive": win_rate_inactive,
+                "success_lift": success_lift,
+                "return_contribution": return_contribution,
+                "success_contribution": success_contribution,
+            }
+        )
+
+    contributions = pd.DataFrame(rows)
+    return_total = contributions["return_contribution"].sum()
+    success_total = contributions["success_contribution"].sum()
+    contributions["return_weight"] = contributions["return_contribution"] / return_total if return_total > 0 else 1.0 / max(len(contributions), 1)
+    contributions["success_weight"] = contributions["success_contribution"] / success_total if success_total > 0 else 1.0 / max(len(contributions), 1)
+    contributions["combined_contribution"] = 0.5 * contributions["return_weight"] + 0.5 * contributions["success_weight"]
+    return contributions.sort_values(
+        ["combined_contribution", "return_contribution", "success_contribution"],
+        ascending=False,
+    ).reset_index(drop=True)
+
+
+def derive_factor_weights(contributions: pd.DataFrame) -> Dict[str, float]:
+    if contributions.empty:
+        return {factor: 1.0 / len(FACTOR_COLUMNS) for factor in FACTOR_COLUMNS}
+    weights = {}
+    working = contributions.set_index("factor")
+    total = float(working["combined_contribution"].sum())
+    if total <= 0:
+        return {factor: 1.0 / len(FACTOR_COLUMNS) for factor in FACTOR_COLUMNS}
+    for factor in FACTOR_COLUMNS:
+        weights[factor] = float(working["combined_contribution"].get(factor, 0.0) / total)
+    return weights
+
+
+def apply_weighted_score(dataset: pd.DataFrame, weights: Dict[str, float]) -> pd.DataFrame:
+    if dataset.empty:
+        return dataset.copy()
+    out = dataset.copy()
+    out["weighted_factor_score"] = 0.0
+    for factor, weight in weights.items():
+        out["weighted_factor_score"] += out[factor].fillna(0.0) * weight
+    out["penalty_score"] = 0.0
+    for factor in PENALTY_COLUMNS:
+        out["penalty_score"] += out[factor].fillna(0.0) * PENALTY_WEIGHTS.get(factor, 0.0)
+    out["net_factor_score"] = out["weighted_factor_score"] - out["penalty_score"]
+    return out.sort_values(["signal_date", "net_factor_score", "code"], ascending=[True, False, True]).reset_index(drop=True)
