@@ -60,6 +60,29 @@ TREND_REBUILT_SUPPORT_FACTORS = [
     "key_k_support_factor",
 ]
 
+REPAIR_V2_CORE_FACTORS = [
+    "first_pullback_trend_after_cross_factor",
+    "first_j_buy_after_cross_factor",
+    "low_volume_pullback_factor",
+]
+
+REPAIR_V2_STRUCTURE_FACTORS = [
+    "rsi_bull_factor",
+    "daily_ma_bull_factor",
+    "staged_volume_burst_factor",
+]
+
+REPAIR_V3_PRIMARY_FACTORS = [
+    "first_pullback_trend_after_cross_factor",
+    "first_j_buy_after_cross_factor",
+]
+
+REPAIR_V3_SUPPORT_FACTORS = [
+    "low_volume_pullback_factor",
+    "rsi_bull_factor",
+    "daily_ma_bull_factor",
+]
+
 PENALTY_COLUMNS = [
     "bearish_volume_penalty",
     "bearish_max_volume_60_penalty",
@@ -577,6 +600,71 @@ def build_trend_rebuilt_candidate_mask(
         & df["double_break_bull_bear_penalty"].fillna(0.0).lt(0.5)
         & confirmation_hits.ge(int(min_confirmation_hits))
         & support_hits.ge(int(min_support_hits))
+    )
+
+
+def build_repair_v2_candidate_mask(
+    df: pd.DataFrame,
+    j_threshold: float = -5.0,
+    min_core_hits: int = 1,
+    min_structure_hits: int = 1,
+) -> pd.Series:
+    base_mask = (
+        df["J"].lt(j_threshold)
+        & df["trend_line"].gt(df["bull_bear_line"])
+        & df["close"].ge(df["bull_bear_line"])
+        & df["close"].ge(df["trend_line"])
+    )
+    core_hits = sum(df[col].fillna(0.0).gt(0.0).astype(int) for col in REPAIR_V2_CORE_FACTORS)
+    structure_hits = (
+        df["rsi_bull_factor"].fillna(0.0).ge(0.2).astype(int)
+        + df["daily_ma_bull_factor"].fillna(0.0).ge(0.5).astype(int)
+        + df["staged_volume_burst_factor"].fillna(0.0).ge(0.2).astype(int)
+    )
+    negative_filter = (
+        df["flat_trend_slope_penalty"].fillna(0.0).lt(0.5)
+        & df["box_oscillation_penalty"].fillna(0.0).lt(0.5)
+        & df["extreme_bull_run_penalty"].fillna(0.0).lt(0.5)
+        & df["bearish_volume_penalty"].fillna(0.0).lt(0.5)
+        & df["bearish_max_volume_60_penalty"].fillna(0.0).lt(0.5)
+        & df["double_break_bull_bear_penalty"].fillna(0.0).lt(0.5)
+    )
+    return base_mask & core_hits.ge(int(min_core_hits)) & structure_hits.ge(int(min_structure_hits)) & negative_filter
+
+
+def build_repair_v3_candidate_mask(
+    df: pd.DataFrame,
+    j_threshold: float = -5.0,
+    min_primary_hits: int = 1,
+    min_support_hits: int = 1,
+) -> pd.Series:
+    base_mask = (
+        df["J"].lt(j_threshold)
+        & df["trend_line"].gt(df["bull_bear_line"])
+        & df["close"].ge(df["bull_bear_line"])
+        & df["close"].ge(df["trend_line"])
+    )
+    primary_hits = sum(df[col].fillna(0.0).gt(0.0).astype(int) for col in REPAIR_V3_PRIMARY_FACTORS)
+    support_hits = (
+        df["low_volume_pullback_factor"].fillna(0.0).gt(0.0).astype(int)
+        + df["rsi_bull_factor"].fillna(0.0).ge(0.2).astype(int)
+        + df["daily_ma_bull_factor"].fillna(0.0).ge(0.5).astype(int)
+    )
+    negative_filter = (
+        df["flat_trend_slope_penalty"].fillna(0.0).lt(0.5)
+        & df["box_oscillation_penalty"].fillna(0.0).lt(0.5)
+        & df["extreme_bull_run_penalty"].fillna(0.0).lt(0.5)
+        & df["bearish_volume_penalty"].fillna(0.0).lt(0.5)
+        & df["bearish_max_volume_60_penalty"].fillna(0.0).lt(0.5)
+        & df["double_break_bull_bear_penalty"].fillna(0.0).lt(0.5)
+        & df["break_bull_bear_penalty"].fillna(0.0).lt(0.5)
+        & df["price_amplitude_factor"].fillna(0.0).lt(0.5)
+    )
+    return (
+        base_mask
+        & primary_hits.ge(int(min_primary_hits))
+        & support_hits.ge(int(min_support_hits))
+        & negative_filter
     )
 
 

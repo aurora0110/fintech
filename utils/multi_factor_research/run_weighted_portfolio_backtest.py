@@ -17,6 +17,8 @@ from utils.multi_factor_research.factor_calculator import (
     FACTOR_COLUMNS,
     FACTOR_NAME_MAP,
     PENALTY_COLUMNS,
+    build_repair_v2_candidate_mask,
+    build_repair_v3_candidate_mask,
     build_trend_rebuilt_candidate_mask,
     build_trend_start_candidate_mask,
     count_trend_rebuilt_confirmation_hits,
@@ -180,7 +182,21 @@ def _build_signal_map(
     for code, df in prepared.items():
         net_score = _calc_net_score_series(df, add_weights, penalty_weights)
         if use_trend_start_pool:
-            if trend_pool_mode == "rebuilt_v1":
+            if trend_pool_mode == "repair_v2":
+                signal_mask = build_repair_v2_candidate_mask(
+                    df,
+                    j_threshold=-5.0,
+                    min_core_hits=rebuilt_min_confirmation_hits,
+                    min_structure_hits=rebuilt_min_support_hits,
+                )
+            elif trend_pool_mode == "repair_v3":
+                signal_mask = build_repair_v3_candidate_mask(
+                    df,
+                    j_threshold=-5.0,
+                    min_primary_hits=rebuilt_min_confirmation_hits,
+                    min_support_hits=rebuilt_min_support_hits,
+                )
+            elif trend_pool_mode == "rebuilt_v1":
                 signal_mask = build_trend_rebuilt_candidate_mask(
                     df,
                     j_threshold=(-5 if buy_mode == "strict_full" else 13),

@@ -72,11 +72,18 @@ def _build_candidate_dataset(
         close_arr = df["close"].to_numpy(dtype=float)
         high_arr = df["high"].to_numpy(dtype=float)
 
-        chunk = df.iloc[signal_idx][base_columns].copy().reset_index(drop=True)
+        df_for_export = df
+        if "date" not in df_for_export.columns:
+            df_for_export = df_for_export.reset_index()
+            if "date" not in df_for_export.columns and "index" in df_for_export.columns:
+                df_for_export = df_for_export.rename(columns={"index": "date"})
+
+        chunk = df_for_export.iloc[signal_idx][base_columns].copy().reset_index(drop=True)
         chunk.rename(columns={"date": "信号日期", "board": "板块", "J": "J值"}, inplace=True)
         chunk["股票代码"] = code
         chunk["信号序号"] = signal_idx
-        chunk["买入日期"] = df["date"].to_numpy()[entry_idx]
+        entry_dates = df_for_export["date"].to_numpy()
+        chunk["买入日期"] = entry_dates[entry_idx]
         chunk["买入价"] = entry_price
         chunk["年份"] = pd.to_datetime(chunk["信号日期"]).dt.year
 
