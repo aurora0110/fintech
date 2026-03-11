@@ -1,1032 +1,995 @@
+# -*- coding: utf-8 -*-
 import os
-import pandas as pd
+import math
+import itertools
 import numpy as np
-import datetime
-import pickle
+import pandas as pd
 
 
-# ==================== 增强功能配置参数 ====================
+# =========================================================
+# 配置
+# =========================================================
+DATA_DIR = "/Users/lidongyang/Desktop/Qstrategy/data/forward_data"
+OUTPUT_DIR = "/Users/lidongyang/Desktop/Qstrategy/data/b1_full_risk_experiment_output"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-REBALANCE_CONFIG = {
-    'enabled': False,
-    'period': 'monthly',
-    'top_n': 10,
-    'force_rebalance': True,
-}
+INITIAL_CAPITAL = 1_000_000
+FEE_RATE = 0.0003
+SLIPPAGE = 0.001
 
-MULTI_START_CONFIG = {
-    'enabled': False,
-    'start_dates': ['2022-01-01', '2023-01-01', '2024-01-01'],
-}
-
-ROLLING_WINDOW_CONFIG = {
-    'enabled': False,
-    'window_years': 2,
-    'frequency': 'monthly',
-}
-
-TURNOVER_CONFIG = {
-    'enabled': True,
-}
+LOAD_PROGRESS_STEP = 500
+SIGNAL_PROGRESS_STEP = 500
+BACKTEST_PROGRESS_STEP = 500
 
 
-# ==================== 增强功能函数 ====================
-
-def get_rebalance_dates(all_dates, period='monthly'):
-    """生成调仓日期列表"""
-    dates = pd.to_datetime(all_dates)
-    rebalance_dates = []
-    
-    if period == 'monthly':
-        df_dates = pd.DataFrame({'date': dates})
-        df_dates['month'] = df_dates['date'].dt.to_period('M')
-        rebalance_dates = df_dates.groupby('month').first()['date'].tolist()
-    elif period == '20d':
-        for i in range(0, len(dates), 20):
-            if i < len(dates):
-                rebalance_dates.append(dates[i])
-    elif period == '5d':
-        for i in range(0, len(dates), 5):
-            if i < len(dates):
-                rebalance_dates.append(dates[i])
-    elif period.endswith('d'):
-        interval = int(period.replace('d', ''))
-        for i in range(0, len(dates), interval):
-            if i < len(dates):
-                rebalance_dates.append(dates[i])
-    
-    return [d for d in rebalance_dates if d in all_dates]
+# =========================================================
+# 基础工具
+# =========================================================
+def get_stock_loc(df: pd.DataFrame, date) -> int:
+    if date not in df.index:
+        return -1
+    loc = df.index.get_loc(date)
+    if isinstance(loc, slice):
+        return int(loc.start)
+    if isinstance(loc, np.ndarray):
+        return int(loc[0]) if len(loc) > 0 else -1
+    return int(loc)
 
 
-def calculate_b1_factor_scores(stock_data, current_date, use_bullish_ma=False):
-    """计算B1策略因子得分"""
-    scores = {}
-    
-    for stock_code, df in stock_data.items():
-        if current_date not in df.index:
-            continue
-        
-        try:
-            idx = df.index.get_loc(current_date)
-        except KeyError:
-            continue
-        
-        if idx < 2:
-            continue
-        
-        row = df.iloc[idx]
-        
-        if pd.isna(row['J']):
-            continue
-        
-        if row['J'] >= -5:
-            continue
-        
-        if use_bullish_ma:
-            ma5 = row.get('MA5')
-            ma10 = row.get('MA10')
-            ma30 = row.get('MA30')
-            close = row.get('CLOSE')
-            if any(pd.isna(x) for x in [ma5, ma10, ma30, close]):
-                continue
-            if not (ma5 > ma10 > ma30 and close > ma30):
-                continue
-        
-        score = max(1, (-row['J'] - 5) / 10)
-        scores[stock_code] = score
-    
-    return scores
+def safe_pct_change(s: pd.Series) -> pd.Series:
+    return s.pct_change().replace([np.inf, -np.inf], np.nan)
 
 
-def run_rebalance_backtest_b1(stock_data, all_dates, use_bullish_ma, rebalance_config, turnover_config):
-    """带强制调仓的B1策略回测"""
-    max_positions = rebalance_config.get('top_n', 10)
-    rebalance_dates = get_rebalance_dates(all_dates, rebalance_config.get('period', 'monthly'))
-    
-    initial_capital = 1000000
-    fee_rate = 0.0003
-    slippage = 0.001
-    
-    cash = float(initial_capital)
-    positions = {}
-    equity_curve = []
-    
-    turnover_records = []
-    rebalance_count = 0
-    
-    pending_signals = {}
-    
-    for i, current_date in enumerate(all_dates):
-        if rebalance_config.get('enabled') and current_date in rebalance_dates:
-            scores = calculate_b1_factor_scores(stock_data, current_date, use_bullish_ma)
-            pending_signals[current_date] = scores
-        
-        if i > 0 and all_dates[i-1] in pending_signals:
-            exec_date = all_dates[i-1]
-            scores = pending_signals[exec_date]
-            
-            sorted_stocks = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-            target_stocks = [s[0] for s in sorted_stocks[:max_positions]]
-            
-            current_value = cash + sum([pos['shares'] * stock_data[pos['stock']].loc[exec_date, 'CLOSE'] 
-                                      if pos['stock'] in stock_data and exec_date in stock_data[pos['stock']].index
-                                      and not pd.isna(stock_data[pos['stock']].loc[exec_date, 'CLOSE'])
-                                      else 0 for pos in positions.values()])
-            
-            sell_value = 0
-            buy_value = 0
-            stocks_to_sell = [s for s in positions.keys() if s not in target_stocks]
-            for stock in stocks_to_sell:
-                if stock in stock_data and exec_date in stock_data[stock].index:
-                    price = stock_data[stock].loc[exec_date, 'CLOSE']
-                    if price > 0 and stock in positions:
-                        shares = positions[stock]['shares']
-                        proceeds = shares * price * (1 - fee_rate - slippage)
-                        sell_value += proceeds
-                        cash += proceeds
-                        del positions[stock]
-            
-            total_after_sell = cash + sum([pos['shares'] * stock_data[pos['stock']].loc[exec_date, 'CLOSE'] 
-                                         if pos['stock'] in stock_data and exec_date in stock_data[pos['stock']].index
-                                         and not pd.isna(stock_data[pos['stock']].loc[exec_date, 'CLOSE'])
-                                         else 0 for pos in positions.values()])
-            
-            stocks_to_buy = [s for s in target_stocks if s not in positions]
-            target_prices = {}
-            for stock in stocks_to_buy:
-                if stock in stock_data and current_date in stock_data[stock].index:
-                    price = stock_data[stock].loc[current_date, 'OPEN']
-                    if price > 0:
-                        target_prices[stock] = price
-            
-            scale_factor = 1.0
-            if stocks_to_buy:
-                needed_cash = sum([target_prices.get(s, 0) * int(total_after_sell / len(stocks_to_buy) / max(target_prices.get(s, 1), 1) / 100) * 100 
-                                 for s in stocks_to_buy if s in target_prices])
-                if needed_cash > cash and needed_cash > 0:
-                    scale_factor = cash / needed_cash * 0.95
-            
-            target_value_per_stock = (total_after_sell * scale_factor) / max_positions
-            
-            for stock in stocks_to_buy:
-                if stock not in target_prices:
-                    continue
-                price = target_prices[stock]
-                
-                shares = int(target_value_per_stock / price / 100) * 100
-                if shares > 0:
-                    cost = shares * price * (1 + fee_rate + slippage)
-                    if cost <= cash:
-                        cash -= cost
-                        buy_value += cost
-                        positions[stock] = {
-                            'stock': stock,
-                            'shares': shares,
-                            'entry_price': price,
-                            'entry_date': current_date
-                        }
-            
-            while len(positions) < max_positions and stocks_to_buy:
-                remaining_stocks = [s for s in target_stocks if s not in positions]
-                if not remaining_stocks:
-                    break
-                next_stock = remaining_stocks[0]
-                if next_stock in target_prices:
-                    price = target_prices[next_stock]
-                    shares = int(target_value_per_stock / price / 100) * 100
-                    if shares > 0:
-                        cost = shares * price * (1 + fee_rate + slippage)
-                        if cost <= cash:
-                            cash -= cost
-                            buy_value += cost
-                            positions[next_stock] = {
-                                'stock': next_stock,
-                                'shares': shares,
-                                'entry_price': price,
-                                'entry_date': current_date
-                            }
-                stocks_to_buy.remove(next_stock)
-            
-            if turnover_config.get('enabled') and current_value > 0:
-                turnover = (sell_value + buy_value) / current_value
-                turnover_records.append(turnover)
-            
-            if sell_value + buy_value > 0:
-                rebalance_count += 1
-        
-        total_value = cash
-        for stock, pos in positions.items():
-            if stock in stock_data and current_date in stock_data[stock].index:
-                price = stock_data[stock].loc[current_date, 'CLOSE']
-                if not pd.isna(price) and price > 0:
-                    total_value += pos['shares'] * price
-        
-        equity_curve.append(total_value)
-    
-    if len(equity_curve) < 2:
-        return None
-    
-    final_multiple = equity_curve[-1] / initial_capital
-    returns_arr = np.array([(equity_curve[i+1] - equity_curve[i]) / equity_curve[i] 
-                           for i in range(len(equity_curve)-1) if equity_curve[i] > 0])
-    
-    sharpe = returns_arr.mean() / returns_arr.std() * np.sqrt(252) if returns_arr.std() > 0 else 0
-    
-    years = len(all_dates) / 252
-    CAGR = (final_multiple ** (1 / years)) - 1 if years > 0 and final_multiple > 0 else -1
-    
-    equity_arr = np.array(equity_curve)
+def calc_profit_factor(ret_series: pd.Series) -> float:
+    pos = ret_series[ret_series > 0].sum()
+    neg = ret_series[ret_series < 0].sum()
+    if abs(neg) < 1e-12:
+        return np.nan
+    return pos / abs(neg)
+
+
+def calc_sharpe(daily_ret: np.ndarray) -> float:
+    if len(daily_ret) <= 1:
+        return np.nan
+    std = np.std(daily_ret, ddof=1)
+    if std <= 1e-12:
+        return np.nan
+    return np.mean(daily_ret) / std * np.sqrt(252)
+
+
+def calc_max_drawdown(equity_arr: np.ndarray) -> float:
+    if len(equity_arr) == 0:
+        return np.nan
     running_max = np.maximum.accumulate(equity_arr)
-    drawdown = (equity_arr - running_max) / running_max
-    max_dd = drawdown.min()
-    
-    avg_turnover = np.mean(turnover_records) if turnover_records else 0
-    
-    return {
-        'desc': f'强制调仓: {rebalance_config.get("period")}',
-        'trade_count': rebalance_count,
-        'CAGR': CAGR * 100,
-        'final_multiple': final_multiple,
-        'max_dd': max_dd * 100,
-        'sharpe': sharpe,
-        'turnover': avg_turnover,
-        'rebalance_count': rebalance_count,
-    }
+    dd = (equity_arr - running_max) / running_max
+    return float(dd.min())
 
 
-def run_multi_start_backtest_b1(stock_data, all_dates, config, use_bullish_ma):
-    """B1策略多起点回测"""
-    results = []
-    
-    for start_date_str in config.get('start_dates', []):
-        start_date = pd.to_datetime(start_date_str)
-        valid_dates = [d for d in all_dates if d >= start_date]
-        if not valid_dates:
-            continue
-        
-        start_date = valid_dates[0]
-        
-        if len(valid_dates) < 60:
-            continue
-        
-        result = run_rebalance_backtest_b1(
-            stock_data, valid_dates, use_bullish_ma,
-            {'enabled': True, 'period': config.get('period', 'monthly'), 'top_n': config.get('top_n', 10)},
-            {'enabled': True}
-        )
-        
-        if result:
-            result['start_date'] = start_date
-            results.append(result)
-    
-    if not results:
-        return None
-    
-    returns = [r['CAGR'] for r in results]
-    sharpes = [r['sharpe'] for r in results]
-    max_dds = [r['max_dd'] for r in results]
-    
-    return {
-        'results': results,
-        'summary': {
-            'avg_annual_return': np.mean(returns),
-            'std_annual_return': np.std(returns),
-            'min_annual_return': np.min(returns),
-            'max_annual_return': np.max(returns),
-            'avg_sharpe': np.mean(sharpes),
-            'avg_max_dd': np.mean(max_dds),
-            'count': len(results)
-        }
-    }
+def calc_cagr(final_multiple: float, n_days: int) -> float:
+    years = max(n_days / 252.0, 1e-9)
+    if final_multiple <= 0:
+        return np.nan
+    return final_multiple ** (1 / years) - 1
 
 
-def run_rolling_window_test_b1(stock_data, all_dates, config, use_bullish_ma):
-    """B1策略滚动窗口测试"""
-    window_years = config.get('window_years', 2)
-    frequency = config.get('frequency', 'monthly')
-    window_days = window_years * 252
-    results = []
-    
-    if frequency == 'monthly':
-        df_dates = pd.DataFrame({'date': all_dates})
-        df_dates['month'] = df_dates['date'].dt.to_period('M')
-        start_indices = df_dates.groupby('month').first().index
-        start_dates = [all_dates[i] for i in range(len(all_dates)) 
-                     if i in start_indices or (i > 0 and df_dates.iloc[i]['month'] != df_dates.iloc[i-1]['month'])]
-    else:
-        start_dates = all_dates[::20]
-    
-    for start_date in start_dates:
-        start_idx = all_dates.index(start_date)
-        end_idx = start_idx + window_days
-        
-        if end_idx >= len(all_dates):
-            continue
-        
-        window_dates = all_dates[start_idx:end_idx]
-        
-        result = run_rebalance_backtest_b1(
-            stock_data, window_dates, use_bullish_ma,
-            {'enabled': True, 'period': config.get('period', 'monthly'), 'top_n': config.get('top_n', 10)},
-            {'enabled': True}
-        )
-        
-        if result:
-            result['start_date'] = start_date
-            result['end_date'] = window_dates[-1]
-            results.append(result)
-    
-    if not results:
-        return None
-    
-    returns = [r['CAGR'] for r in results]
-    
-    return {
-        'results': results,
-        'distribution': {
-            'mean': np.mean(returns),
-            'std': np.std(returns),
-            'min': np.min(returns),
-            'max': np.max(returns),
-            'median': np.median(returns),
-            'count': len(results)
-        }
-    }
-
-
-def write_log(content):
-    script_path = os.path.abspath(__file__)
-    script_dir = os.path.dirname(script_path)
-    script_name = os.path.splitext(os.path.basename(script_path))[0]
-    log_file = os.path.join(script_dir, script_name + ".txt")
-
-    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-    new_record = f"\n========== {timestamp } ==========\n"
-    new_record += content + "\n\n"
-
-    if os.path.exists(log_file):
-        with open(log_file, "r", encoding="utf-8") as f:
-            old = f.read()
-    else:
-        old = ""
-
-    with open(log_file, "w", encoding="utf-8") as f:
-        f.write(new_record + old)
-
-
-# ===========================
-# 涨跌幅限制
-# ===========================
-
-def is_chi_next_or_star(stock_code):
-    """判断是否为创业板或科创板股票"""
-    code = stock_code.upper()
-    if code.startswith("300") or code.startswith("688"):
-        return True
-    return False
-
-def limit_price_change(price, prev_price, stock_code, direction="both"):
-    """
-    限制涨跌幅
-    direction: "up"=涨停, "down"=跌停, "both"=双向限制
-    """
-    if prev_price <= 0 or price <= 0:
-        return price
-    
-    change_pct = (price - prev_price) / prev_price
-    
-    if is_chi_next_or_star(stock_code):
-        max_change = 0.20  # 创业板/科创板 20%
-    else:
-        max_change = 0.10  # 主板 10%
-    
-    if direction == "up":
-        max_change = max_change
-    elif direction == "down":
-        max_change = -max_change
-    else:
-        max_change = max_change
-    
-    if change_pct > max_change:
-        return prev_price * (1 + max_change)
-    elif change_pct < -max_change:
-        return prev_price * (1 - max_change)
-    
-    return price
-
-
-def check_data_anomaly(df):
+# =========================================================
+# 数据清洗与指标
+# =========================================================
+def check_data_anomaly(df: pd.DataFrame) -> set:
     anomaly_dates = set()
-    
     if len(df) < 2:
         return anomaly_dates
-    
+
     for i in range(len(df)):
         row = df.iloc[i]
-        open_p = row['OPEN']
-        high = row['HIGH']
-        low = row['LOW']
-        close = row['CLOSE']
-        volume = row['VOLUME']
-        
+        open_p = row["OPEN"]
+        high = row["HIGH"]
+        low = row["LOW"]
+        close = row["CLOSE"]
+        volume = row["VOLUME"]
+
         if pd.isna(open_p) or pd.isna(high) or pd.isna(low) or pd.isna(close):
             anomaly_dates.add(df.index[i])
             continue
-        
-        if high == low and low == close:
+
+        if min(open_p, high, low, close) <= 0:
             anomaly_dates.add(df.index[i])
             continue
-        
+
+        if high < max(open_p, close) or low > min(open_p, close):
+            anomaly_dates.add(df.index[i])
+            continue
+
+        if pd.isna(volume) or volume <= 0:
+            anomaly_dates.add(df.index[i])
+            continue
+
         if i > 0:
-            prev_close = df.iloc[i-1]['CLOSE']
-            if not pd.isna(prev_close) and prev_close > 0:
+            prev_close = df.iloc[i - 1]["CLOSE"]
+            if pd.notna(prev_close) and prev_close > 0:
                 change_pct = (close - prev_close) / prev_close * 100
-                if change_pct > 20 or change_pct < -20:
+                if change_pct > 25 or change_pct < -25:
                     anomaly_dates.add(df.index[i])
-                    continue
-        
-        if volume <= 0:
-            anomaly_dates.add(df.index[i])
-            continue
-        
-        if close > 0 and open_p > 0:
-            if close > high or close < low or open_p > high or open_p < low:
-                anomaly_dates.add(df.index[i])
-                continue
-        
-        if i > 0:
-            prev_open = df.iloc[i-1]['OPEN']
-            prev_close = df.iloc[i-1]['CLOSE']
-            if pd.isna(prev_open) or pd.isna(prev_close):
-                anomaly_dates.add(df.index[i])
-                continue
-    
+
     return anomaly_dates
 
 
-def calculate_indicators(df):
-    close = df['CLOSE']
-    open_p = df['OPEN']
-    high = df['HIGH']
-    low = df['LOW']
-    volume = df['VOLUME']
-    
-    df['涨跌幅'] = close.pct_change() * 100
-    
-    df['MA5'] = close.rolling(5).mean()
-    df['MA10'] = close.rolling(10).mean()
-    df['MA20'] = close.rolling(20).mean()
-    df['MA30'] = close.rolling(30).mean()
-    df['MA60'] = close.rolling(60).mean()
-    
+def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    close = df["CLOSE"]
+    high = df["HIGH"]
+    low = df["LOW"]
+    volume = df["VOLUME"]
+
+    # 均线
+    df["MA5"] = close.rolling(5).mean()
+    df["MA10"] = close.rolling(10).mean()
+    df["MA20"] = close.rolling(20).mean()
+    df["MA30"] = close.rolling(30).mean()
+    df["MA60"] = close.rolling(60).mean()
+
+    # KDJ
     low_9 = low.rolling(9).min()
     high_9 = high.rolling(9).max()
-    rsv = (close - low_9) / (high_9 - low_9 + 1e-6) * 100
-    df['K'] = rsv.ewm(com=2, adjust=False).mean()
-    df['D'] = df['K'].ewm(com=2, adjust=False).mean()
-    df['J'] = 3 * df['K'] - 2 * df['D']
-    
-    exp12 = close.ewm(span=12, adjust=False).mean()
-    exp26 = close.ewm(span=26, adjust=False).mean()
-    df['MACD_DIF'] = exp12 - exp26
-    df['MACD_DEA'] = df['MACD_DIF'].ewm(span=9, adjust=False).mean()
-    df['MACD_MACD'] = 2 * (df['MACD_DIF'] - df['MACD_DEA'])
-    
-    delta = close.diff()
-    gain = delta.where(delta > 0, 0).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-    rs = gain / (loss + 1e-6)
-    df['RSI14'] = 100 - (100 / (1 + rs))
-    
-    df['RSI28'] = df['RSI14'].rolling(28).mean()
-    df['RSI57'] = df['RSI14'].rolling(57).mean()
-    
-    df['是否阳线'] = close > open_p
-    df['是否阴线'] = close < open_p
-    
-    df['VOLUME_MA5'] = volume.rolling(5).mean()
-    df['VOLUME_MA20'] = volume.rolling(20).mean()
-    df['VOLUME_MA60'] = volume.rolling(60).mean()
-    
-    df['知行短期趋势线'] = close.ewm(span=5, adjust=False).mean()
-    df['知行多空线'] = close.ewm(span=10, adjust=False).mean()
-    
-    high = df['HIGH']
-    low = df['LOW']
+    rsv = (close - low_9) / (high_9 - low_9 + 1e-9) * 100
+    df["K"] = rsv.ewm(com=2, adjust=False).mean()
+    df["D"] = df["K"].ewm(com=2, adjust=False).mean()
+    df["J"] = 3 * df["K"] - 2 * df["D"]
+    df["J_Q05_30"] = df["J"].rolling(30).quantile(0.05)
+
+    # 趋势线 / 多空线
+    df["trend_line"] = close.ewm(span=10, adjust=False).mean()
+    df["trend_line"] = df["trend_line"].ewm(span=10, adjust=False).mean()
+    df["MA14"] = close.rolling(14).mean()
+    df["MA28"] = close.rolling(28).mean()
+    df["MA57"] = close.rolling(57).mean()
+    df["MA114"] = close.rolling(114).mean()
+    df["bull_bear_line"] = (df["MA14"] + df["MA28"] + df["MA57"] + df["MA114"]) / 4.0
+
+    # ATR
     tr1 = high - low
-    tr2 = abs(high - close.shift(1))
-    tr3 = abs(low - close.shift(1))
+    tr2 = (high - close.shift(1)).abs()
+    tr3 = (low - close.shift(1)).abs()
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-    df['ATR14'] = tr.rolling(window=14).mean()
-    
+    df["ATR14"] = tr.rolling(14).mean()
+
+    # 主策略条件
+    df["trend_ok"] = df["trend_line"] > df["bull_bear_line"]
+    df["bullish_filter"] = (
+        (df["CLOSE"] > df["MA30"]) &
+        (df["MA10"] > df["MA10"].shift(5)) &
+        (df["MA30"] > df["MA30"].shift(5))
+    )
+
+    # 市场状态代理原子字段
+    df["ret1"] = safe_pct_change(close)
+    df["vol_ma20"] = volume.rolling(20).mean()
+    df["vol_expand"] = volume > df["vol_ma20"]
+
     return df
 
 
-def is_bullish_ma(df, idx):
-    """
-    判断是否满足日线多头条件:
-    1. 5日均线 > 10日均线
-    2. 10日均线 > 30日均线
-    3. 收盘价位于30日均线上方
-    """
-    if idx < 1:
-        return False
-    
-    row = df.iloc[idx]
-    
-    ma5 = row.get('MA5')
-    ma10 = row.get('MA10')
-    ma30 = row.get('MA30')
-    close = row.get('CLOSE')
-    
-    if any(pd.isna(x) for x in [ma5, ma10, ma30, close]):
-        return False
-    
-    cond1 = ma5 > ma10
-    cond2 = ma10 > ma30
-    cond3 = close > ma30
-    
-    return cond1 and cond2 and cond3
-
-
-def calculate_b1_score(df, idx, use_bullish_ma=False):
-    if idx < 2:
-        return 0, {}
-    
-    row = df.iloc[idx]
-    
-    if pd.isna(row['J']):
-        return 0, {}
-    
-    if row['J'] >= -5:
-        return 0, {}
-    
-    if use_bullish_ma:
-        if not is_bullish_ma(df, idx):
-            return 0, {}
-    
-    # 根据J值的大小计算分数，J值越小，分数越高
-    score = max(1, (-row['J'] - 5) / 10)
-    details = {'J': row['J'], 'score': score}
-    
-    return score, details
-
-
-def run_backtest(data_dir, min_score=0.5, use_bullish_ma=False, desc=""):
-    initial_capital = 1000000
-    fee_rate = 0.0003
-    slippage = 0.001
-    
+def load_all_data(data_dir: str):
     stock_data = {}
-    daily_signals = {}
-    daily_scores = {}
     all_dates = []
-    
+
     print("加载数据...")
-    files = [f for f in os.listdir(data_dir) if f.endswith('.txt')]
+    files = [f for f in os.listdir(data_dir) if f.endswith(".txt")]
+    total_files = len(files)
     loaded_count = 0
-    
-    for file in files:
-        stock_code = file.replace('.txt', '')
-        
-        # 排除北交所股票（BJ开头或代码中包含北交所标识）
-        if stock_code.startswith('BJ'):
+
+    for i, file in enumerate(files, 1):
+        stock_code = file.replace(".txt", "")
+
+        if stock_code.startswith("BJ"):
+            if i % LOAD_PROGRESS_STEP == 0 or i == total_files:
+                print(f"加载进度: {i}/{total_files}")
             continue
-        
-        # 获取股票代码部分（去掉市场前缀）
-        if '#' in stock_code:
-            code_part = stock_code.split('#')[1]
-        else:
-            code_part = stock_code
-        
-        # 排除北交所股票（8开头且第二位是3，或83、87开头）
-        if code_part.startswith('8') and len(code_part) >= 3:
-            if code_part[1] == '3' or code_part.startswith('83') or code_part.startswith('87'):
+
+        code_part = stock_code.split("#")[1] if "#" in stock_code else stock_code
+        if code_part.startswith("8") and len(code_part) >= 3:
+            if code_part[1] == "3" or code_part.startswith("83") or code_part.startswith("87"):
+                if i % LOAD_PROGRESS_STEP == 0 or i == total_files:
+                    print(f"加载进度: {i}/{total_files}")
                 continue
-        
-        # 确定涨跌幅限制
-        limit_pct = 0.10  # 默认主板10%
-        if code_part.startswith('300'):
-            limit_pct = 0.20  # 创业板20%
-        elif code_part.startswith('688'):
-            limit_pct = 0.30  # 科创板30%
-        
+
         path = os.path.join(data_dir, file)
-        
+
         try:
-            df = pd.read_csv(path, sep='\t', encoding='utf-8')
-            df.columns = ['日期', 'OPEN', 'HIGH', 'LOW', 'CLOSE', 'VOLUME', 'AMOUNT']
-            df['日期'] = pd.to_datetime(df['日期'])
-            df = df.set_index('日期')
-            df = df.sort_index()
-            
-            df['limit_pct'] = limit_pct
-            
+            df = pd.read_csv(path, sep="\t", encoding="utf-8")
+            if df.shape[1] < 7:
+                if i % LOAD_PROGRESS_STEP == 0 or i == total_files:
+                    print(f"加载进度: {i}/{total_files}")
+                continue
+
+            df = df.iloc[:, :7].copy()
+            df.columns = ["日期", "OPEN", "HIGH", "LOW", "CLOSE", "VOLUME", "AMOUNT"]
+            df["日期"] = pd.to_datetime(df["日期"], errors="coerce")
+            df = df.dropna(subset=["日期"])
+            df = df.set_index("日期").sort_index()
+            df = df[~df.index.duplicated(keep="last")]
+
+            if len(df) < 150:
+                if i % LOAD_PROGRESS_STEP == 0 or i == total_files:
+                    print(f"加载进度: {i}/{total_files}")
+                continue
+
             anomaly_dates = check_data_anomaly(df)
             if len(anomaly_dates) > len(df) * 0.1:
+                if i % LOAD_PROGRESS_STEP == 0 or i == total_files:
+                    print(f"加载进度: {i}/{total_files}")
                 continue
-            
+
             df = calculate_indicators(df)
             stock_data[stock_code] = df
             loaded_count += 1
-            
-            for i in range(2, len(df)):
-                score, details = calculate_b1_score(df, i, use_bullish_ma)
-                if score >= min_score:
-                    date = df.index[i]
-                    if date not in daily_signals:
-                        daily_signals[date] = []
-                        daily_scores[date] = []
-                    daily_signals[date].append(stock_code)
-                    daily_scores[date].append((stock_code, score, details))
-            
-            # 加载全部数据，不限制数量
-        
+            all_dates.extend(df.index.tolist())
+
         except Exception as e:
             print(f"加载失败 {file}: {e}")
-            continue
-    
-    print(f"成功加载 {loaded_count} 只股票")
-    
-    # 收集所有日期
-    all_dates = []
-    for df in stock_data.values():
-        all_dates.extend(df.index.tolist())
+
+        if i % LOAD_PROGRESS_STEP == 0 or i == total_files:
+            print(f"加载进度: {i}/{total_files}")
+
     all_dates = sorted(set(all_dates))
-    
+    print(f"成功加载 {loaded_count} 只股票")
     print(f"总交易日: {len(all_dates)}")
-    print(f"有信号的天数: {len(daily_signals)}")
-    
-    date_to_idx = {date: idx for idx, date in enumerate(all_dates)}
-    
-    cash = float(initial_capital)
+    return stock_data, all_dates
+
+
+# =========================================================
+# 市场状态开关（无行业风格数据版）
+# =========================================================
+def build_market_regime(stock_data: dict, all_dates: list) -> pd.DataFrame:
+    rows = []
+    items = list(stock_data.items())
+    total = len(items)
+
+    # 聚合横截面数据
+    date_bucket = {}
+    for i, (code, df) in enumerate(items, 1):
+        tmp = df[["ret1", "vol_expand", "CLOSE", "MA20"]].copy()
+        tmp["close_above_ma20"] = tmp["CLOSE"] > tmp["MA20"]
+        for dt, row in tmp.iterrows():
+            if dt not in date_bucket:
+                date_bucket[dt] = {"rets": [], "vol_expand": [], "close_above_ma20": []}
+            if pd.notna(row["ret1"]):
+                date_bucket[dt]["rets"].append(float(row["ret1"]))
+            if pd.notna(row["vol_expand"]):
+                date_bucket[dt]["vol_expand"].append(bool(row["vol_expand"]))
+            if pd.notna(row["close_above_ma20"]):
+                date_bucket[dt]["close_above_ma20"].append(bool(row["close_above_ma20"]))
+
+        if i % SIGNAL_PROGRESS_STEP == 0 or i == total:
+            print(f"市场状态构建进度: {i}/{total}")
+
+    for dt in all_dates:
+        bucket = date_bucket.get(dt, None)
+        if bucket is None or len(bucket["rets"]) == 0:
+            rows.append({
+                "date": dt,
+                "up_ratio": np.nan,
+                "strong_ratio": np.nan,
+                "vol_expand_ratio": np.nan,
+                "above_ma20_ratio": np.nan,
+            })
+            continue
+
+        rets = np.array(bucket["rets"], dtype=float)
+        vol_expand = np.array(bucket["vol_expand"], dtype=bool)
+        above_ma20 = np.array(bucket["close_above_ma20"], dtype=bool)
+
+        rows.append({
+            "date": dt,
+            "up_ratio": np.mean(rets > 0),
+            "strong_ratio": np.mean(rets > 0.03),
+            "vol_expand_ratio": np.mean(vol_expand),
+            "above_ma20_ratio": np.mean(above_ma20),
+        })
+
+    regime_df = pd.DataFrame(rows).set_index("date").sort_index()
+
+    # 开关条件可实验时调用
+    return regime_df
+
+
+def regime_pass(regime_row: pd.Series, regime_mode: str) -> bool:
+    if regime_mode == "none":
+        return True
+    if regime_row is None or regime_row.isna().all():
+        return False
+
+    if regime_mode == "basic":
+        return (
+            regime_row["up_ratio"] >= 0.45 and
+            regime_row["above_ma20_ratio"] >= 0.45
+        )
+    if regime_mode == "strong":
+        return (
+            regime_row["up_ratio"] >= 0.50 and
+            regime_row["strong_ratio"] >= 0.08 and
+            regime_row["above_ma20_ratio"] >= 0.50
+        )
+    return True
+
+
+# =========================================================
+# 主策略信号
+# =========================================================
+def build_main_strategy_signals_for_stock(df: pd.DataFrame) -> pd.DataFrame:
+    x = df.copy()
+    cond = (
+        x["J"].notna() &
+        x["J_Q05_30"].notna() &
+        (x["J"] <= x["J_Q05_30"]) &
+        x["trend_ok"] &
+        x["bullish_filter"]
+    )
+    out = x.loc[cond, ["OPEN", "HIGH", "LOW", "CLOSE", "J", "J_Q05_30", "ATR14"]].copy()
+    out["score"] = (-out["J"]).fillna(0.0)  # J越低分越高
+    return out
+
+
+def build_daily_signals(stock_data: dict):
+    daily_scores = {}
+    items = list(stock_data.items())
+    total = len(items)
+
+    print("开始构建主策略信号...")
+    for i, (stock_code, df) in enumerate(items, 1):
+        sig_df = build_main_strategy_signals_for_stock(df)
+        if not sig_df.empty:
+            for dt, row in sig_df.iterrows():
+                daily_scores.setdefault(dt, []).append(
+                    {
+                        "stock": stock_code,
+                        "score": float(row["score"]),
+                        "J": float(row["J"]) if pd.notna(row["J"]) else np.nan,
+                        "J_Q05_30": float(row["J_Q05_30"]) if pd.notna(row["J_Q05_30"]) else np.nan,
+                        "ATR14": float(row["ATR14"]) if pd.notna(row["ATR14"]) else np.nan,
+                    }
+                )
+
+        if i % SIGNAL_PROGRESS_STEP == 0 or i == total:
+            print(f"信号构建进度: {i}/{total}")
+
+    print(f"主策略有信号的天数: {len(daily_scores)}")
+    return daily_scores
+
+
+def generate_pending_buy_signals(daily_scores: dict, all_dates: list):
+    date_to_idx = {d: i for i, d in enumerate(all_dates)}
+    pending_buy = {}
+    for signal_date, items in daily_scores.items():
+        i = date_to_idx.get(signal_date, None)
+        if i is None or i + 1 >= len(all_dates):
+            continue
+        next_date = all_dates[i + 1]
+        pending_buy.setdefault(next_date, []).extend(items)
+    return pending_buy
+
+
+def get_mark_price(df: pd.DataFrame, current_date):
+    idx = get_stock_loc(df, current_date)
+    if idx >= 0:
+        px = df.iloc[idx]["CLOSE"]
+        if pd.notna(px) and px > 0:
+            return float(px)
+    hist = df.loc[:current_date, "CLOSE"]
+    hist = hist[pd.notna(hist) & (hist > 0)]
+    return float(hist.iloc[-1]) if len(hist) > 0 else np.nan
+
+
+# =========================================================
+# 止损/止盈
+# =========================================================
+def get_stop_price(stop_mode: str, entry_low: float, signal_low: float, entry_price: float, atr14: float):
+    if stop_mode == "entry_low_093":
+        return entry_low * 0.93
+    if stop_mode == "entry_low_095":
+        return entry_low * 0.95
+    if stop_mode == "signal_or_entry_tighter_095":
+        vals = [v for v in [entry_low, signal_low] if pd.notna(v) and v > 0]
+        return max(vals) * 0.95 if vals else np.nan
+    if stop_mode == "atr_1.0":
+        return entry_price - atr14 * 1.0 if pd.notna(atr14) and atr14 > 0 else np.nan
+    if stop_mode == "atr_1.5":
+        return entry_price - atr14 * 1.5 if pd.notna(atr14) and atr14 > 0 else np.nan
+    return np.nan
+
+
+def should_schedule_take_profit(pos: dict, high_p: float, close_p: float):
+    tp_mode = pos["take_profit_mode"]
+    if tp_mode == "none":
+        return False, None
+
+    entry_price = pos["entry_price"]
+
+    if tp_mode == "fixed_2":
+        target = entry_price * 1.02
+        return pd.notna(high_p) and high_p >= target, "止盈2%"
+    if tp_mode == "fixed_3":
+        target = entry_price * 1.03
+        return pd.notna(high_p) and high_p >= target, "止盈3%"
+    if tp_mode == "fixed_4":
+        target = entry_price * 1.04
+        return pd.notna(high_p) and high_p >= target, "止盈4%"
+    if tp_mode == "fixed_5":
+        target = entry_price * 1.05
+        return pd.notna(high_p) and high_p >= target, "止盈5%"
+    if tp_mode == "fixed_6":
+        target = entry_price * 1.06
+        return pd.notna(high_p) and high_p >= target, "止盈6%"
+
+    # 分批：这里只做简化版，达到3%后卖一半，达到5%后卖剩余
+    if tp_mode == "ladder_3_5":
+        if (not pos.get("tp1_done", False)) and pd.notna(high_p) and high_p >= entry_price * 1.03:
+            return True, "分批止盈1"
+        if pos.get("tp1_done", False) and pd.notna(high_p) and high_p >= entry_price * 1.05:
+            return True, "分批止盈2"
+        return False, None
+
+    # 达标后跟踪止盈：先达到3%，后续跌破前一日低点退出
+    if tp_mode == "trail_after_3":
+        if not pos.get("trail_armed", False):
+            if pd.notna(high_p) and high_p >= entry_price * 1.03:
+                pos["trail_armed"] = True
+        return False, None
+
+    return False, None
+
+
+# =========================================================
+# 停机机制
+# =========================================================
+def should_pause_by_trade_window(trade_pnls: list, pause_rule: str):
+    if pause_rule == "loss_streak_3_pause_5":
+        return False  # 由主流程连亏逻辑处理
+    if pause_rule == "loss_streak_3_pause_7":
+        return False
+    if pause_rule == "loss_streak_4_pause_5":
+        return False
+    if pause_rule == "avg10_lt0_pause5":
+        if len(trade_pnls) >= 10 and np.mean(trade_pnls[-10:]) < 0:
+            return True
+    if pause_rule == "winrate10_lt40_pause5":
+        if len(trade_pnls) >= 10:
+            last10 = trade_pnls[-10:]
+            wr = np.mean(np.array(last10) > 0)
+            if wr < 0.40:
+                return True
+    return False
+
+
+def get_loss_streak_params(pause_rule: str):
+    if pause_rule == "loss_streak_3_pause_5":
+        return 3, 5
+    if pause_rule == "loss_streak_3_pause_7":
+        return 3, 7
+    if pause_rule == "loss_streak_4_pause_5":
+        return 4, 5
+    return None, None
+
+
+# =========================================================
+# 回测
+# =========================================================
+def run_backtest(
+    stock_data: dict,
+    all_dates: list,
+    pending_buy_signals: dict,
+    regime_df: pd.DataFrame,
+    params: dict,
+    exp_name: str,
+):
+    max_positions = params["max_positions"]
+    max_new_buys_per_day = params["max_new_buys_per_day"]
+    max_hold_days = params["max_hold_days"]
+    day_cash_cap = params["day_cash_cap"]
+    single_pos_cap = params["single_pos_cap"]
+    take_profit_mode = params["take_profit_mode"]
+    stop_mode = params["stop_mode"]
+    pause_rule = params["pause_rule"]
+    regime_mode = params["regime_mode"]
+    score_bucket = params["score_bucket"]
+
+    cash = float(INITIAL_CAPITAL)
     positions = []
     equity_curve = []
-    stopped = False
-    
+    date_to_idx = {d: i for i, d in enumerate(all_dates)}
+
     trade_count = 0
     win_count = 0
     loss_count = 0
-    max_consecutive_losses = 0
     current_consecutive_losses = 0
+    max_consecutive_losses = 0
     pause_trading_days = 0
-    
-    yearly_returns = {}
-    holding_returns = []  # 存储所有已完成交易的收益率
-    exit_records = []  # 存储卖出记录
-    
-    # 生成待执行的买入信号（当日收盘后生成，次日执行）
-    pending_buy_signals = {}
-    for date in daily_signals:
-        date_idx = all_dates.index(date)
-        if date_idx + 1 < len(all_dates):
-            next_date = all_dates[date_idx + 1]
-            if next_date not in pending_buy_signals:
-                pending_buy_signals[next_date] = []
-            pending_buy_signals[next_date].extend(daily_scores[date])
-    
-    pending_exit_signals = {}
-    first_trade_date = None
-    last_trade_date = None
-    
-    for current_date in all_dates:
-        if stopped:
-            break
-        
+    trade_pnls = []
+    holding_returns = []
+    exit_records = []
+
+    total_days = len(all_dates)
+
+    print(f"\n开始回测：{exp_name}")
+    print(f"参数：{params}")
+
+    for day_i, current_date in enumerate(all_dates, 1):
         if pause_trading_days > 0:
             pause_trading_days -= 1
-        
-        current_idx = date_to_idx[current_date]
+
+        current_global_idx = date_to_idx[current_date]
+
+        # =========================
+        # 1) 卖出
+        # =========================
         new_positions = []
-        
         for pos in positions:
             stock = pos["stock"]
             df = stock_data[stock]
-            
-            if current_date not in df.index:
+            stock_idx = get_stock_loc(df, current_date)
+
+            if stock_idx < 0:
                 new_positions.append(pos)
                 continue
-            
-            row = df.loc[current_date]
-            
-            if pd.isna(row["CLOSE"]) or row["CLOSE"] <= 0:
-                new_positions.append(pos)
-                continue
-            
+
+            row = df.iloc[stock_idx]
             open_p = row["OPEN"]
-            high = row["HIGH"]
-            low = row["LOW"]
-            close = row["CLOSE"]
-            
-            entry_price = pos["entry_price"]
-            entry_idx = pos["entry_idx"]
-            holding_days = current_idx - entry_idx
-            
-            if current_idx < entry_idx + 1:
-                new_positions.append(pos)
-                continue
-            
-            entry_low = pos["entry_low"]
-            stop_price = entry_low * 0.95
-            
+            high_p = row["HIGH"]
+            low_p = row["LOW"]
+            close_p = row["CLOSE"]
+
             exit_flag = False
-            exit_price = None
             exit_reason = ""
-            
-            if current_date in pending_exit_signals and stock in pending_exit_signals[current_date]:
+            exit_price = np.nan
+
+            if pos.get("scheduled_exit_date") == current_date:
                 exit_flag = True
-                exit_info = pending_exit_signals[current_date][stock]
-                exit_price = exit_info['exit_price']
-                exit_reason = exit_info['exit_reason']
-            elif not pos.get('exit_marked', False):
-                if close < stop_price:
-                    if current_idx + 1 < len(all_dates):
-                        next_day = all_dates[current_idx + 1]
-                        if next_day not in pending_exit_signals:
-                            pending_exit_signals[next_day] = {}
-                        pending_exit_signals[next_day][stock] = {
-                            'exit_price': row['OPEN'],
-                            'exit_reason': '止损'
-                        }
-                        pos['exit_marked'] = True
-                
-                exit_days = [3, 5, 10, 20, 30]
-                if holding_days in exit_days:
-                    if current_idx + 1 < len(all_dates):
-                        next_day = all_dates[current_idx + 1]
-                        if next_day not in pending_exit_signals:
-                            pending_exit_signals[next_day] = {}
-                        pending_exit_signals[next_day][stock] = {
-                            'exit_price': row['OPEN'],
-                            'exit_reason': f'到期{holding_days}日卖出'
-                        }
-                        pos['exit_marked'] = True
-            
+                exit_reason = pos.get("scheduled_exit_reason", "计划卖出")
+                exit_price = open_p
+
+            if not exit_flag and not pos.get("exit_marked", False):
+                hold_days = current_global_idx - pos["entry_global_idx"]
+
+                # 分批止盈逻辑
+                if take_profit_mode == "ladder_3_5":
+                    if (not pos.get("tp1_done", False)) and pd.notna(high_p) and high_p >= pos["entry_price"] * 1.03:
+                        # 次日开盘卖一半
+                        if current_global_idx + 1 < len(all_dates):
+                            pos["scheduled_exit_date"] = all_dates[current_global_idx + 1]
+                            pos["scheduled_exit_reason"] = "分批止盈1"
+                            pos["partial_exit_ratio"] = 0.5
+                            pos["exit_marked"] = True
+                    elif pos.get("tp1_done", False) and pd.notna(high_p) and high_p >= pos["entry_price"] * 1.05:
+                        if current_global_idx + 1 < len(all_dates):
+                            pos["scheduled_exit_date"] = all_dates[current_global_idx + 1]
+                            pos["scheduled_exit_reason"] = "分批止盈2"
+                            pos["partial_exit_ratio"] = 1.0
+                            pos["exit_marked"] = True
+
+                # 达标后跟踪止盈
+                if take_profit_mode == "trail_after_3":
+                    if not pos.get("trail_armed", False):
+                        if pd.notna(high_p) and high_p >= pos["entry_price"] * 1.03:
+                            pos["trail_armed"] = True
+                    else:
+                        prev_idx = stock_idx - 1
+                        if prev_idx >= 0:
+                            prev_low = df.iloc[prev_idx]["LOW"]
+                            if pd.notna(close_p) and pd.notna(prev_low) and close_p < prev_low:
+                                if current_global_idx + 1 < len(all_dates):
+                                    pos["scheduled_exit_date"] = all_dates[current_global_idx + 1]
+                                    pos["scheduled_exit_reason"] = "跟踪止盈退出"
+                                    pos["partial_exit_ratio"] = 1.0
+                                    pos["exit_marked"] = True
+
+                # 固定止盈
+                hit_tp, tp_reason = should_schedule_take_profit(pos, high_p, close_p)
+                if hit_tp and (not pos.get("exit_marked", False)):
+                    if current_global_idx + 1 < len(all_dates):
+                        pos["scheduled_exit_date"] = all_dates[current_global_idx + 1]
+                        pos["scheduled_exit_reason"] = tp_reason
+                        pos["partial_exit_ratio"] = 1.0
+                        pos["exit_marked"] = True
+
+                # 止损
+                if (not pos.get("exit_marked", False)) and pd.notna(close_p) and pd.notna(pos["stop_price"]) and close_p < pos["stop_price"]:
+                    if current_global_idx + 1 < len(all_dates):
+                        pos["scheduled_exit_date"] = all_dates[current_global_idx + 1]
+                        pos["scheduled_exit_reason"] = "止损"
+                        pos["partial_exit_ratio"] = 1.0
+                        pos["exit_marked"] = True
+
+                # 状态止损：跌破趋势线
+                if (not pos.get("exit_marked", False)) and pos.get("use_trend_stop", False):
+                    trend_line = row["trend_line"]
+                    if pd.notna(close_p) and pd.notna(trend_line) and close_p < trend_line:
+                        if current_global_idx + 1 < len(all_dates):
+                            pos["scheduled_exit_date"] = all_dates[current_global_idx + 1]
+                            pos["scheduled_exit_reason"] = "跌破趋势线"
+                            pos["partial_exit_ratio"] = 1.0
+                            pos["exit_marked"] = True
+
+                # 最长持有
+                if (not pos.get("exit_marked", False)) and hold_days >= max_hold_days:
+                    if current_global_idx + 1 < len(all_dates):
+                        pos["scheduled_exit_date"] = all_dates[current_global_idx + 1]
+                        pos["scheduled_exit_reason"] = f"到期{max_hold_days}日卖出"
+                        pos["partial_exit_ratio"] = 1.0
+                        pos["exit_marked"] = True
+
             if exit_flag:
-                sell_price = exit_price
-                
-                prev_row = df.iloc[current_idx - 1] if current_idx > 0 else None
-                if prev_row is not None and 'limit_pct' in df.columns:
-                    prev_close = prev_row['CLOSE']
-                    if prev_close > 0:
-                        limit_down = prev_close * (1 - df.iloc[current_idx]['limit_pct'])
-                        if sell_price <= limit_down:
-                            sell_price = limit_down
-                
-                sell_value = pos['shares'] * sell_price * (1 - fee_rate - slippage)
+                if pd.isna(exit_price) or exit_price <= 0:
+                    new_positions.append(pos)
+                    continue
+
+                exit_ratio = pos.get("partial_exit_ratio", 1.0)
+                exit_shares = int(pos["shares"] * exit_ratio / 100) * 100 if exit_ratio < 1 else pos["shares"]
+                if exit_shares <= 0:
+                    exit_shares = pos["shares"]
+
+                sell_value = exit_shares * exit_price * (1 - FEE_RATE - SLIPPAGE)
                 cash += sell_value
-                
-                pnl = (sell_price - entry_price) / entry_price
+
+                pnl = (exit_price - pos["entry_price"]) / pos["entry_price"]
                 trade_count += 1
                 holding_returns.append(pnl)
-                
+                trade_pnls.append(pnl)
+
                 if pnl > 0:
                     win_count += 1
                     current_consecutive_losses = 0
                 else:
                     loss_count += 1
                     current_consecutive_losses += 1
-                    if current_consecutive_losses > max_consecutive_losses:
-                        max_consecutive_losses = current_consecutive_losses
-                
-                if current_consecutive_losses >= 3:
-                    pause_trading_days = 2
-                
-                # 记录卖出事件，用于后续统计
-                exit_record = {
-                    'stock': pos['stock'],
-                    'exit_date': current_date,
-                    'exit_price': exit_price,
-                    'exit_reason': exit_reason,
-                    'holding_days': holding_days
-                }
-                exit_records.append(exit_record)
+                    max_consecutive_losses = max(max_consecutive_losses, current_consecutive_losses)
+
+                loss_streak_trigger, loss_pause_days = get_loss_streak_params(pause_rule)
+                if loss_streak_trigger is not None and current_consecutive_losses >= loss_streak_trigger:
+                    pause_trading_days = loss_pause_days
+
+                if should_pause_by_trade_window(trade_pnls, pause_rule):
+                    pause_trading_days = 5
+
+                exit_records.append({
+                    "stock": stock,
+                    "entry_date": pos["entry_date"],
+                    "exit_date": current_date,
+                    "entry_price": pos["entry_price"],
+                    "exit_price": exit_price,
+                    "ret": pnl,
+                    "hold_days": current_global_idx - pos["entry_global_idx"],
+                    "exit_reason": exit_reason,
+                })
+
+                remain_shares = pos["shares"] - exit_shares
+                if remain_shares > 0 and exit_ratio < 1.0:
+                    pos["shares"] = remain_shares
+                    pos["tp1_done"] = True
+                    pos["exit_marked"] = False
+                    pos["scheduled_exit_date"] = None
+                    pos["scheduled_exit_reason"] = None
+                    pos["partial_exit_ratio"] = None
+                    new_positions.append(pos)
             else:
                 new_positions.append(pos)
-        
+
         positions = new_positions
-        
-        # 执行前一天发出的买入信号（次日以开盘价买入）
-        if current_date in pending_buy_signals and pause_trading_days == 0:
-            candidates = pending_buy_signals[current_date]
-            
-            if candidates:
-                candidates_sorted = sorted(candidates, key=lambda x: x[1], reverse=True)
-                top_stock = candidates_sorted[0][0]
-                
-                df = stock_data[top_stock]
-                if current_date not in df.index:
-                    continue
-                row = df.loc[current_date]
-                open_price = row['OPEN']
-                
-                if open_price <= 0:
-                    continue
-                
-                # 检查当日趋势线>多空线
-                trend_line = row.get('知行短期趋势线')
-                dk_line = row.get('知行多空线')
-                if pd.isna(trend_line) or pd.isna(dk_line):
-                    continue
-                if trend_line <= dk_line:
-                    continue
-                
-                # 如果使用日线多头条件，检查日线多头排列
-                if use_bullish_ma:
-                    ma5 = row.get('MA5')
-                    ma10 = row.get('MA10')
-                    ma30 = row.get('MA30')
-                    close = row.get('CLOSE')
-                    if any(pd.isna(x) for x in [ma5, ma10, ma30, close]):
-                        continue
-                    if not (ma5 > ma10 > ma30 and close > ma30):
-                        continue
-                
-                # 全仓交易，使用最低价的0.95作为止损
-                stop_loss = row['LOW'] * 0.95
-                
-                prev_row = df.iloc[current_idx - 1] if current_idx > 0 else None
-                limit_up = None
-                limit_down = None
-                if prev_row is not None and 'limit_pct' in df.columns:
-                    prev_close = prev_row['CLOSE']
-                    if prev_close > 0:
-                        limit_up = prev_close * (1 + df.iloc[current_idx]['limit_pct'])
-                        limit_down = prev_close * (1 - df.iloc[current_idx]['limit_pct'])
-                        if open_price >= limit_up:
+
+        # =========================
+        # 2) 买入
+        # =========================
+        if pause_trading_days == 0 and current_date in pending_buy_signals:
+            regime_row = regime_df.loc[current_date] if current_date in regime_df.index else None
+            if regime_pass(regime_row, regime_mode):
+                available_slots = max_positions - len(positions)
+                if available_slots > 0 and cash > 0:
+                    candidates = pending_buy_signals[current_date]
+                    candidates = sorted(candidates, key=lambda x: x["score"], reverse=True)
+
+                    # 信号分层过滤
+                    if len(candidates) > 0 and score_bucket != "all":
+                        scores = np.array([x["score"] for x in candidates], dtype=float)
+                        if score_bucket == "top50":
+                            thresh = np.quantile(scores, 0.50)
+                            candidates = [x for x in candidates if x["score"] >= thresh]
+                        elif score_bucket == "top30":
+                            thresh = np.quantile(scores, 0.70)
+                            candidates = [x for x in candidates if x["score"] >= thresh]
+                        elif score_bucket == "top10":
+                            thresh = np.quantile(scores, 0.90)
+                            candidates = [x for x in candidates if x["score"] >= thresh]
+
+                    already_holding = {p["stock"] for p in positions}
+                    bought_today = 0
+                    day_used_cash = 0.0
+                    day_cash_limit = (cash + sum(
+                        p["shares"] * get_mark_price(stock_data[p["stock"]], current_date)
+                        for p in positions if pd.notna(get_mark_price(stock_data[p["stock"]], current_date))
+                    )) * day_cash_cap
+
+                    for item in candidates:
+                        if available_slots <= 0 or cash <= 0:
+                            break
+                        if bought_today >= max_new_buys_per_day:
+                            break
+
+                        stock = item["stock"]
+                        if stock in already_holding:
                             continue
-                
-                shares = int(cash / open_price / 100) * 100
-                if shares > 0:
-                    cost = shares * open_price * (1 + fee_rate + slippage)
-                    if cost <= cash:
+
+                        df = stock_data[stock]
+                        stock_idx = get_stock_loc(df, current_date)
+                        if stock_idx < 0:
+                            continue
+
+                        row = df.iloc[stock_idx]
+                        open_price = row["OPEN"]
+                        low_price = row["LOW"]
+                        atr14 = row["ATR14"]
+
+                        if pd.isna(open_price) or open_price <= 0 or pd.isna(low_price) or low_price <= 0:
+                            continue
+
+                        # 单票上限 + 当日资金预算 + 剩余仓位均分 三者取最小
+                        total_equity_now = cash + sum(
+                            p["shares"] * get_mark_price(stock_data[p["stock"]], current_date)
+                            for p in positions if pd.notna(get_mark_price(stock_data[p["stock"]], current_date))
+                        )
+                        alloc_by_slot = cash / available_slots
+                        alloc_by_single_cap = total_equity_now * single_pos_cap
+                        alloc_by_day_cap = max(day_cash_limit - day_used_cash, 0.0)
+                        allocation = min(alloc_by_slot, alloc_by_single_cap, alloc_by_day_cap)
+
+                        if allocation <= 0:
+                            continue
+
+                        shares = int(allocation / (open_price * (1 + FEE_RATE + SLIPPAGE)) / 100) * 100
+                        if shares <= 0:
+                            continue
+
+                        cost = shares * open_price * (1 + FEE_RATE + SLIPPAGE)
+                        if cost > cash:
+                            continue
+
+                        signal_idx = stock_idx - 1
+                        signal_low = df.iloc[signal_idx]["LOW"] if signal_idx >= 0 else np.nan
+                        stop_price = get_stop_price(stop_mode, low_price, signal_low, open_price, atr14)
+
                         cash -= cost
-                        
+                        day_used_cash += cost
+
                         positions.append({
-                            'stock': top_stock,
-                            'shares': shares,
-                            'entry_price': open_price,
-                            'entry_low': row['LOW'],
-                            'entry_date': current_date,
-                            'entry_idx': current_idx
+                            "stock": stock,
+                            "shares": shares,
+                            "entry_price": open_price,
+                            "entry_low": low_price,
+                            "signal_low": signal_low,
+                            "entry_date": current_date,
+                            "entry_global_idx": current_global_idx,
+                            "stop_price": stop_price,
+                            "score": item["score"],
+                            "exit_marked": False,
+                            "scheduled_exit_date": None,
+                            "scheduled_exit_reason": None,
+                            "partial_exit_ratio": None,
+                            "tp1_done": False,
+                            "trail_armed": False,
+                            "take_profit_mode": take_profit_mode,
+                            "use_trend_stop": True,
                         })
-        
-        position_value = 0
+                        already_holding.add(stock)
+                        available_slots -= 1
+                        bought_today += 1
+
+        # =========================
+        # 3) 估值
+        # =========================
+        position_value = 0.0
         for pos in positions:
-            stock = pos['stock']
-            if stock in stock_data and current_date in stock_data[stock].index:
-                price = stock_data[stock].loc[current_date, 'CLOSE']
-                if pd.isna(price) or price <= 0:
-                    df_s = stock_data[stock]
-                    valid_prices = df_s.loc[:current_date]['CLOSE']
-                    valid_prices = valid_prices[valid_prices > 0]
-                    if len(valid_prices) > 0:
-                        price = valid_prices.iloc[-1]
-                if price > 0:
-                    position_value += pos['shares'] * price
-        
+            stock = pos["stock"]
+            mark_price = get_mark_price(stock_data[stock], current_date)
+            if pd.notna(mark_price) and mark_price > 0:
+                position_value += pos["shares"] * mark_price
+
         total_value = cash + position_value
+
+        # 防止估值异常为0
+        if total_value <= 0 or not np.isfinite(total_value):
+            total_value = equity_curve[-1] if len(equity_curve) > 0 else INITIAL_CAPITAL
+
         equity_curve.append(total_value)
-        
-        year = current_date.year
-        if year not in yearly_returns:
-            yearly_returns[year] = []
-        if len(equity_curve) > 1:
-            daily_return = (equity_curve[-1] - equity_curve[-2]) / equity_curve[-2]
-            yearly_returns[year].append(daily_return)
-        
-        if positions and first_trade_date is None:
-            first_trade_date = current_date
-        last_trade_date = current_date
-    
-    final_multiple = equity_curve[-1] / initial_capital if equity_curve else 1
-    returns_arr = np.array([(equity_curve[i+1] - equity_curve[i]) / equity_curve[i] 
-                           for i in range(len(equity_curve)-1) if equity_curve[i] > 0])
-    
-    if len(returns_arr) > 0:
-        sharpe = returns_arr.mean() / returns_arr.std() * np.sqrt(252) if returns_arr.std() > 0 else 0
-    else:
-        sharpe = 0
-    
-    if first_trade_date and last_trade_date:
-        years = (last_trade_date - first_trade_date).days / 365.25
-        years = max(years, 0.01)
-    else:
-        years = len(all_dates) / 252
-    
-    if years > 0 and final_multiple > 0:
-        CAGR = (final_multiple ** (1 / years)) - 1
-    else:
-        CAGR = -1
-    
-    equity_arr = np.array(equity_curve)
-    running_max = np.maximum.accumulate(equity_arr)
-    drawdown = (equity_arr - running_max) / running_max
-    max_dd = drawdown.min()
-    
-    success_rate = win_count / trade_count * 100 if trade_count > 0 else 0
-    
-    # 持有期间收益率已经在交易完成时记录
-    avg_holding_return = np.mean(holding_returns) * 100 if holding_returns else 0
-    max_holding_return = np.max(holding_returns) * 100 if holding_returns else 0
-    
-    print(f"\n{'='*60}")
-    print(f"{desc}")
-    print(f"{'='*60}")
-    print(f"初始资金: {initial_capital:,.0f}")
-    print(f"最终资金: {equity_curve[-1]:,.2f}")
+
+        if day_i % BACKTEST_PROGRESS_STEP == 0 or day_i == total_days:
+            print(f"回测进度: {day_i}/{total_days}")
+
+    # 统计
+    equity_arr = np.array(equity_curve, dtype=float)
+    daily_ret = np.array([
+        (equity_arr[i + 1] - equity_arr[i]) / equity_arr[i]
+        for i in range(len(equity_arr) - 1)
+        if equity_arr[i] > 0 and np.isfinite(equity_arr[i + 1])
+    ])
+
+    final_capital = float(equity_arr[-1]) if len(equity_arr) > 0 else INITIAL_CAPITAL
+    final_multiple = final_capital / INITIAL_CAPITAL
+    max_dd = calc_max_drawdown(equity_arr)
+    sharpe = calc_sharpe(daily_ret)
+    cagr = calc_cagr(final_multiple, len(all_dates))
+
+    success_rate = win_count / trade_count * 100 if trade_count > 0 else np.nan
+    avg_holding_return = np.mean(holding_returns) * 100 if holding_returns else np.nan
+    max_holding_return = np.max(holding_returns) * 100 if holding_returns else np.nan
+    profit_factor = calc_profit_factor(pd.Series(holding_returns)) if holding_returns else np.nan
+    calmar = (cagr * 100) / abs(max_dd * 100) if pd.notna(cagr) and pd.notna(max_dd) and abs(max_dd) > 1e-12 else np.nan
+
+    print(f"\n{'=' * 100}")
+    print(exp_name)
+    print(f"{'=' * 100}")
+    print(f"初始资金: {INITIAL_CAPITAL:,.0f}")
+    print(f"最终资金: {final_capital:,.2f}")
     print(f"最终倍数: {final_multiple:.2f}")
-    print(f"年化收益率(CAGR): {CAGR*100:.2f}%")
-    print(f"最大回撤: {max_dd*100:.2f}%")
+    print(f"年化收益率(CAGR): {cagr * 100:.2f}%")
+    print(f"最大回撤: {max_dd * 100:.2f}%")
+    print(f"Calmar: {calmar:.2f}")
     print(f"夏普比率: {sharpe:.2f}")
     print(f"总交易次数: {trade_count}")
     print(f"成功率: {success_rate:.2f}%")
+    print(f"盈亏比: {profit_factor:.2f}")
     print(f"平均持有期间收益率: {avg_holding_return:.2f}%")
     print(f"最大持有期间收益率: {max_holding_return:.2f}%")
     print(f"最大连续失败次数: {max_consecutive_losses}")
-    
+    print(f"当前未平仓数: {len(positions)}")
+
     return {
-        'desc': desc,
-        'initial_capital': initial_capital,
-        'final_capital': equity_curve[-1],
-        'final_multiple': final_multiple,
-        'CAGR': CAGR * 100,
-        'max_dd': max_dd * 100,
-        'sharpe': sharpe,
-        'trade_count': trade_count,
-        'success_rate': success_rate,
-        'avg_holding_return': avg_holding_return,
-        'max_holding_return': max_holding_return,
-        'max_consecutive_losses': max_consecutive_losses,
-        'exit_records': exit_records,
-        'stock_data': stock_data
+        "实验名称": exp_name,
+        "最终资金": final_capital,
+        "最终倍数": final_multiple,
+        "年化收益率": cagr * 100,
+        "最大回撤": max_dd * 100,
+        "Calmar": calmar,
+        "夏普比率": sharpe,
+        "总交易次数": trade_count,
+        "成功率": success_rate,
+        "盈亏比": profit_factor,
+        "平均持有期间收益率": avg_holding_return,
+        "最大持有期间收益率": max_holding_return,
+        "最大连续失败次数": max_consecutive_losses,
+        "当前未平仓数": len(positions),
+        **params,
     }
 
 
+# =========================================================
+# 主程序
+# =========================================================
+def main():
+    stock_data, all_dates = load_all_data(DATA_DIR)
+    daily_scores = build_daily_signals(stock_data)
+    pending_buy_signals = generate_pending_buy_signals(daily_scores, all_dates)
+    regime_df = build_market_regime(stock_data, all_dates)
+
+    # 这里只给一版“专业但不爆炸”的实验矩阵
+    param_grid = {
+        "max_positions": [10, 5],
+        "max_new_buys_per_day": [1, 2, 3],
+        "max_hold_days": [2, 3],
+        "day_cash_cap": [0.30, 0.50],          # 单日最多动用30%/50%资金
+        "single_pos_cap": [0.10, 0.15],        # 单票仓位上限10%/15%
+        "take_profit_mode": [
+            "none", "fixed_2", "fixed_3", "fixed_4", "fixed_5", "ladder_3_5", "trail_after_3"
+        ],
+        "stop_mode": [
+            "entry_low_093", "entry_low_095", "signal_or_entry_tighter_095", "atr_1.0"
+        ],
+        "pause_rule": [
+            "loss_streak_3_pause_5",
+            "loss_streak_3_pause_7",
+            "avg10_lt0_pause5",
+            "winrate10_lt40_pause5"
+        ],
+        "regime_mode": [
+            "none", "basic"
+        ],
+        "score_bucket": [
+            "all", "top50", "top30"
+        ],
+    }
+
+    keys = list(param_grid.keys())
+    values = list(param_grid.values())
+    all_param_combos = [dict(zip(keys, v)) for v in itertools.product(*values)]
+
+    results = []
+    print("\n" + "=" * 140)
+    print("开始 B1 主策略专业风控/止盈/状态开关实验")
+    print("=" * 140)
+
+    total_exps = len(all_param_combos)
+    for i, params in enumerate(all_param_combos, 1):
+        exp_name = (
+            f"实验{i}_{total_exps}"
+            f"_持仓{params['max_positions']}"
+            f"_单日新开{params['max_new_buys_per_day']}"
+            f"_持有{params['max_hold_days']}"
+            f"_日资金{int(params['day_cash_cap']*100)}%"
+            f"_单票{int(params['single_pos_cap']*100)}%"
+            f"_止盈{params['take_profit_mode']}"
+            f"_止损{params['stop_mode']}"
+            f"_停机{params['pause_rule']}"
+            f"_市场{params['regime_mode']}"
+            f"_分层{params['score_bucket']}"
+        )
+
+        res = run_backtest(
+            stock_data=stock_data,
+            all_dates=all_dates,
+            pending_buy_signals=pending_buy_signals,
+            regime_df=regime_df,
+            params=params,
+            exp_name=exp_name,
+        )
+        results.append(res)
+
+    result_df = pd.DataFrame(results)
+    result_df["回撤绝对值"] = result_df["最大回撤"].abs()
+
+    out_csv = os.path.join(OUTPUT_DIR, "b1_professional_risk_experiment_results.csv")
+    result_df.to_csv(out_csv, index=False, encoding="utf-8-sig")
+
+    print("\n" + "=" * 180)
+    print("全部实验结果完整汇总")
+    print("=" * 180)
+    with pd.option_context("display.max_rows", None, "display.max_columns", None, "display.width", 400):
+        print(result_df.to_string(index=False))
+
+    # 压回撤优先
+    best_by_drawdown = result_df.sort_values(
+        by=["回撤绝对值", "Calmar", "夏普比率", "年化收益率"],
+        ascending=[True, False, False, False]
+    ).iloc[0]
+
+    print("\n" + "=" * 140)
+    print("压回撤优先的最优结果")
+    print("=" * 140)
+    print(best_by_drawdown.to_string())
+
+    # 收益优先
+    best_by_return = result_df.sort_values(
+        by=["年化收益率", "Calmar", "夏普比率", "回撤绝对值"],
+        ascending=[False, False, False, True]
+    ).iloc[0]
+
+    print("\n" + "=" * 140)
+    print("收益优先的最优结果")
+    print("=" * 140)
+    print(best_by_return.to_string())
+
+    # 风险收益平衡优先
+    best_balanced = result_df.sort_values(
+        by=["Calmar", "夏普比率", "回撤绝对值", "年化收益率"],
+        ascending=[False, False, True, False]
+    ).iloc[0]
+
+    print("\n" + "=" * 140)
+    print("风险收益平衡优先的最优结果")
+    print("=" * 140)
+    print(best_balanced.to_string())
+
+    pd.DataFrame([best_by_drawdown]).to_csv(
+        os.path.join(OUTPUT_DIR, "b1_best_by_drawdown.csv"), index=False, encoding="utf-8-sig"
+    )
+    pd.DataFrame([best_by_return]).to_csv(
+        os.path.join(OUTPUT_DIR, "b1_best_by_return.csv"), index=False, encoding="utf-8-sig"
+    )
+    pd.DataFrame([best_balanced]).to_csv(
+        os.path.join(OUTPUT_DIR, "b1_best_balanced.csv"), index=False, encoding="utf-8-sig"
+    )
+
+    print("\n结果已保存到：")
+    print(out_csv)
+    print(os.path.join(OUTPUT_DIR, "b1_best_by_drawdown.csv"))
+    print(os.path.join(OUTPUT_DIR, "b1_best_by_return.csv"))
+    print(os.path.join(OUTPUT_DIR, "b1_best_balanced.csv"))
+
+
 if __name__ == "__main__":
-    data_dir = "/Users/lidongyang/Desktop/Qstrategy/data/forward_data"
-    
-    print("=" * 70)
-    print("对比测试：J<-5+趋势线>多空线 vs J<-5+趋势线>多空线+日线多头排列")
-    print("=" * 70)
-    
-    result1 = run_backtest(data_dir, min_score=0.5, use_bullish_ma=False, desc="测试1: J<-5+趋势线>多空线")
-    
-    result2 = run_backtest(data_dir, min_score=0.5, use_bullish_ma=True, desc="测试2: J<-5+趋势线>多空线+日线多头排列")
-    
-    print("\n" + "=" * 70)
-    print("对比结果汇总")
-    print("=" * 70)
-    print(f"{'指标':<25} {'J<-5+趋势线>多空线':<18} {'J<-5+趋势线>多空线+日线多头':<18}")
-    print("-" * 70)
-    print(f"{'平均年化收益率':<20} {result1['CAGR']:.2f}%{'':<8} {result2['CAGR']:.2f}%")
-    print(f"{'最大年化收益率':<20} {result1['final_multiple']:.2f}x{'':<8} {result2['final_multiple']:.2f}x")
-    print(f"{'平均持有期间收益率':<18} {result1['avg_holding_return']:.2f}%{'':<8} {result2['avg_holding_return']:.2f}%")
-    print(f"{'最大持有期间收益率':<16} {result1['max_holding_return']:.2f}%{'':<8} {result2['max_holding_return']:.2f}%")
-    print(f"{'最大回撤率':<22} {result1['max_dd']:.2f}%{'':<8} {result2['max_dd']:.2f}%")
-    print(f"{'最大连续失败次数':<17} {result1['max_consecutive_losses']}{'':<12} {result2['max_consecutive_losses']}")
-    print(f"{'夏普比率':<22} {result1['sharpe']:.2f}{'':<12} {result2['sharpe']:.2f}")
-    
-    print("\n" + "=" * 70)
-    print("卖出后N日涨跌概率统计")
-    print("=" * 70)
-    
-    stock_data = result1.get('stock_data', {})
-    
-    for days in [3, 5, 10, 30]:
-        print(f"\n--- 卖出后{days}日 ---")
-        for idx, result in enumerate([result1, result2], 1):
-            exit_records = result.get('exit_records', [])
-            up_count = 0
-            down_count = 0
-            total = 0
-            
-            for record in exit_records:
-                stock = record['stock']
-                exit_date = record['exit_date']
-                exit_price = record['exit_price']
-                
-                df = stock_data.get(stock)
-                if df is None:
-                    continue
-                
-                try:
-                    exit_idx = df.index.get_loc(exit_date)
-                    future_idx = exit_idx + days
-                    if future_idx < len(df):
-                        future_price = df.iloc[future_idx]['CLOSE']
-                        if pd.notna(future_price) and exit_price > 0:
-                            if future_price > exit_price:
-                                up_count += 1
-                            else:
-                                down_count += 1
-                            total += 1
-                except:
-                    continue
-            
-            if total > 0:
-                up_pct = up_count / total * 100
-                down_pct = down_count / total * 100
-                print(f"测试{idx}: 上涨概率 {up_pct:.1f}% ({up_count}/{total}), 下跌概率 {down_pct:.1f}% ({down_count}/{total})")
-            else:
-                print(f"测试{idx}: 无数据")
+    main()

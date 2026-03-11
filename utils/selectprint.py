@@ -41,8 +41,7 @@ def show(input_list, type):
             profit_str = "请人工判断" if "请人工判断" in str(profit) else profit
             
             # 格式化输出（列对齐，用|分隔）
-            if code.startswith("00") or code.startswith("60"):
-                print(f"股票代码{code:<6} | 止损价：{stop_p:<8} | 当日收盘价：{close_p:<10} | 盈亏比粗估：{profit_str}")
+            print(f"股票代码{code:<6} | 止损价：{stop_p:<8} | 当日收盘价：{close_p:<10} | 盈亏比粗估：{profit_str}")
         
         # 3.2 处理持有监控（中文操作：止损/持有等）
         elif is_all_chinese and len(x) >= 2:

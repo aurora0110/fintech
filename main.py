@@ -1,6 +1,6 @@
 import time
 import random
-from utils import b1filter, b2filter, b3filter, pinfilter, holdprint, selectprint, stockDataValidator, stoploss,takeprofit
+from utils import b1filter, pinfilter, brick_filter, holdprint, selectprint, stockDataValidator, stoploss, takeprofit
 from datetime import datetime
 from pathlib import Path
 from tqdm import tqdm
@@ -13,9 +13,8 @@ if __name__ == '__main__':
     start_time = time.time()
     # 买入卖出信号
     b1_list = []
-    b2_list = []
-    b3_list = []
     pin_list = []
+    brick_list = []
     sell_list = []
 
     # 获取今天日期
@@ -63,29 +62,38 @@ if __name__ == '__main__':
         if b1_result[0] == 1:
             b1_list.append([file_name, str(b1_result[1].round(2)), str(b1_result[2].round(2)), str(b1_result[3]), str(b1_result[4])])
         # 针对B2进行校验
-        b2_result = b2filter.check(str(file_path), hold_list)
-        if b2_result[0][0] == 1:
-            b2_list.append([file_name, str(b2_result[0][1]), str(b2_result[0][2].round(2))])
+        #b2_result = b2filter.check(str(file_path), hold_list)
+        #if b2_result[0][0] == 1:
+            #b2_list.append([file_name, str(b2_result[0][1]), str(b2_result[0][2].round(2))])
         # 针对B3进行校验
-        b3_result = b3filter.check(str(file_path), hold_list, b2_result[1])
-        if b3_result[0] == 1:
-            b3_list.append([file_name, str(b3_result[1]), str(b3_result[2]), str(b3_result[3])])
+        #b3_result = b3filter.check(str(file_path), hold_list, b2_result[1])
+        #if b3_result[0] == 1:
+            #b3_list.append([file_name, str(b3_result[1]), str(b3_result[2]), str(b3_result[3])])
         # 针对单针进行校验
         pin_result = pinfilter.check(str(file_path))
         if pin_result:
             pin_list.append(file_name)
+        # 针对brick策略进行校验
+        brick_result = brick_filter.check(str(file_path), hold_list)
+        if brick_result[0] == 1:
+            brick_list.append([
+                file_name,
+                str(round(brick_result[1], 2)),
+                str(round(brick_result[2], 2)),
+                str(brick_result[3]),
+                str(brick_result[4]),
+            ])
 
     sell_list.sort()
     b1_list.sort()
-    b2_list.sort()
-    b3_list.sort()
     pin_list.sort()
+    brick_list.sort()
 
-    print("💡持有列表：", sell_list, '\n', "💡b1列表：", b1_list, '\n', "💡b3列表：",b3_list, '\n', "💡单针列表：", pin_list, '\n')
+    print("💡持有列表：", sell_list, '\n', "💡b1列表：", b1_list, '\n', "💡单针列表：", pin_list, '\n', "💡brick列表：", brick_list, '\n')
     selectprint.show(sell_list, "持有")
     selectprint.show(b1_list, "B1")
-    selectprint.show(b3_list, "B3")
     selectprint.show(pin_list, "单针")
+    selectprint.show(brick_list, "BRICK")
     
     # 保存筛选结果到文件，供dashboard.py读取
     # 创建结果目录
@@ -98,9 +106,9 @@ if __name__ == '__main__':
     with open(result_file, 'w', encoding='utf-8') as f:
         json.dump({
             'b1_list': b1_list,
-            'b3_list': b3_list,
             'sell_list': sell_list,
             'pin_list': pin_list,
+            'brick_list': brick_list,
             'hold_list': hold_list
         }, f, ensure_ascii=False, indent=2)
     
