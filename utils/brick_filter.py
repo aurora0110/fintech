@@ -13,6 +13,7 @@ MIN_BARS = 160
 EPS = 1e-12
 TOP_N = 10
 PCT_RANK_THRESHOLD = 0.50
+MODE = "perfect"
 
 DATE_COL_CANDIDATES = ["date", "Date", "trade_date", "日期", "DATE"]
 OPEN_COL_CANDIDATES = ["open", "Open", "开盘", "OPEN"]
@@ -168,10 +169,92 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
         & x["not_sideways"].fillna(False)
         & x["ret1"].notna()
     )
+
+    x["ret10"] = x["close"].pct_change(10)
+    x["ret20"] = x["close"].pct_change(20)
+    x["trend_spread"] = safe_div(x["trend_line"] - x["long_line"], x["close"], default=np.nan)
+    x["close_to_trend"] = safe_div(x["close"] - x["trend_line"], x["trend_line"], default=np.nan)
+    x["close_to_long"] = safe_div(x["close"] - x["long_line"], x["long_line"], default=np.nan)
+
+    delta = x["close"].diff()
+    up = delta.clip(lower=0)
+    down = (-delta).clip(lower=0)
+    avg_up_14 = up.ewm(alpha=1 / 14, adjust=False).mean()
+    avg_down_14 = down.ewm(alpha=1 / 14, adjust=False).mean()
+    avg_up_28 = up.ewm(alpha=1 / 28, adjust=False).mean()
+    avg_down_28 = down.ewm(alpha=1 / 28, adjust=False).mean()
+    avg_up_57 = up.ewm(alpha=1 / 57, adjust=False).mean()
+    avg_down_57 = down.ewm(alpha=1 / 57, adjust=False).mean()
+    x["RSI14"] = 100 - 100 / (1 + safe_div(avg_up_14, avg_down_14.replace(0, np.nan)))
+    x["RSI28"] = 100 - 100 / (1 + safe_div(avg_up_28, avg_down_28.replace(0, np.nan)))
+    x["RSI57"] = 100 - 100 / (1 + safe_div(avg_up_57, avg_down_57.replace(0, np.nan)))
+
+    low_9 = x["low"].rolling(9).min()
+    high_9 = x["high"].rolling(9).max()
+    rsv = safe_div(x["close"] - low_9, (high_9 - low_9).replace(0, np.nan)) * 100
+    x["K"] = pd.Series(rsv, index=x.index).ewm(alpha=1 / 3, adjust=False).mean()
+    x["D"] = x["K"].ewm(alpha=1 / 3, adjust=False).mean()
+    x["J"] = 3 * x["K"] - 2 * x["D"]
+    x["J_turn_up"] = x["J"] > x["J"].shift(1)
+
+    rng = (x["high"] - x["low"]).replace(0, np.nan)
+    x["body_abs"] = (x["close"] - x["open"]).abs()
+    x["body_pct"] = safe_div(x["body_abs"], x["close"], default=np.nan)
+    x["upper_shadow"] = (x["high"] - x[["open", "close"]].max(axis=1)).clip(lower=0)
+    x["lower_shadow"] = (x[["open", "close"]].min(axis=1) - x["low"]).clip(lower=0)
+    x["upper_shadow_pct"] = safe_div(x["upper_shadow"], rng, default=np.nan)
+    x["lower_shadow_pct"] = safe_div(x["lower_shadow"], rng, default=np.nan)
+    x["close_location"] = safe_div(x["close"] - x["low"], rng, default=np.nan)
+
+    x["touch_trend"] = x["low"] <= x["trend_line"] * 1.015
+    x["touch_long"] = x["low"] <= x["long_line"] * 1.015
+    x["trend_riding"] = x["close_to_trend"].between(0.0, 0.08, inclusive="both")
+
+    x["green_bar"] = x["close"] > x["open"]
+    x["double_bull_bar"] = x["green_bar"] & (x["volume"] >= x["volume"].shift(1) * 2.0)
+    x["prior_double_bull_20"] = x["double_bull_bar"].shift(1).rolling(20).max().fillna(0).astype(bool)
+    x["double_bar_high"] = np.nan
+    x["double_bar_low"] = np.nan
+    x["double_bar_close"] = np.nan
+    last_high = np.nan
+    last_low = np.nan
+    last_close = np.nan
+    for idx, row in x.iterrows():
+        if bool(row["double_bull_bar"]):
+            last_high = float(row["high"])
+            last_low = float(row["low"])
+            last_close = float(row["close"])
+        x.at[idx, "double_bar_high"] = last_high
+        x.at[idx, "double_bar_low"] = last_low
+        x.at[idx, "double_bar_close"] = last_close
+    x["support_above_double_low"] = x["close"] >= x["double_bar_low"]
+    x["support_above_double_close"] = x["close"] >= x["double_bar_close"]
+    x["support_above_double_high"] = x["close"] >= x["double_bar_high"]
+    x["dist_to_double_high"] = safe_div(x["close"] - x["double_bar_high"], x["double_bar_high"], default=np.nan)
+    x["dist_to_double_close"] = safe_div(x["close"] - x["double_bar_close"], x["double_bar_close"], default=np.nan)
+    x["dist_to_double_low"] = safe_div(x["close"] - x["double_bar_low"], x["double_bar_low"], default=np.nan)
+    x["prior5_avg_close_to_trend"] = x["close_to_trend"].shift(1).rolling(5).mean()
+    x["price_vol_trend_sync"] = (
+        x["ret10"].gt(0.01)
+        & x["close_to_long"].gt(0.05)
+        & x["signal_vs_ma5"].between(0.65, 3.8, inclusive="both")
+    )
+    x["strong_trend_setup"] = (
+        x["trend_line"].gt(x["long_line"])
+        & x["trend_spread"].gt(0.025)
+        & x["close_to_long"].gt(0.04)
+        & x["ret10"].gt(0.01)
+        & x["RSI14"].ge(55)
+        & x["prior_double_bull_20"]
+        & x["support_above_double_close"].fillna(False)
+        & x["close_location"].ge(0.72)
+        & x["upper_shadow_pct"].le(0.28)
+        & x["signal_vs_ma5"].between(0.65, 3.8, inclusive="both")
+    )
     return x
 
 
-def build_signal_df(input_dir: Path) -> pd.DataFrame:
+def build_signal_df(input_dir: Path, mode: str = MODE) -> pd.DataFrame:
     rows: List[dict] = []
     files = sorted([p for p in input_dir.iterdir() if p.suffix.lower() in {".csv", ".txt"}])
     total = len(files)
@@ -181,14 +264,20 @@ def build_signal_df(input_dir: Path) -> pd.DataFrame:
             continue
         code = str(df["code"].iloc[0])
         x = add_features(df)
-        mask_a = x["pattern_a"] & (x["rebound_ratio"] >= 1.2)
+        mask_a = x["pattern_a"] & (x["rebound_ratio"] >= (1.2 if mode == "legacy" else 0.8))
         mask_b = x["pattern_b"] & (x["rebound_ratio"] >= 1.0)
-        mask = (
+        legacy_mask = (
             x["signal_base"]
             & (x["ret1"] <= 0.08)
             & (mask_a | mask_b)
             & (x["trend_line"] > x["long_line"])
         )
+        perfect_mask = (
+            (legacy_mask | x["strong_trend_setup"])
+            & x["trend_line"].gt(x["long_line"])
+            & x["ret1"].between(-0.03, 0.11, inclusive="both")
+        )
+        mask = legacy_mask if mode == "legacy" else perfect_mask
         signal_idxs = np.flatnonzero(mask.to_numpy())
         for signal_idx in signal_idxs:
             close = float(x.at[int(signal_idx), "close"])
@@ -201,6 +290,16 @@ def build_signal_df(input_dir: Path) -> pd.DataFrame:
             up_leg_avg_vol = float(x.at[int(signal_idx), "up_leg_avg_vol"])
             pullback_shrink_ratio = pullback_avg_vol / up_leg_avg_vol if np.isfinite(up_leg_avg_vol) and up_leg_avg_vol > 0 else np.nan
             trend_spread_clip = max((trend_line - long_line) / close, 0.0) if np.isfinite(close) and close > 0 else 0.0
+            trend_quality = triangle_quality(float(x.at[int(signal_idx), "trend_spread"]), 0.08, 0.06)
+            support_quality = (
+                1.0 if bool(x.at[int(signal_idx), "support_above_double_high"]) else
+                0.75 if bool(x.at[int(signal_idx), "support_above_double_close"]) else
+                0.45 if bool(x.at[int(signal_idx), "support_above_double_low"]) else 0.0
+            )
+            momentum_quality = 0.5 * triangle_quality(float(x.at[int(signal_idx), "RSI14"]), 62.0, 12.0) + 0.5 * triangle_quality(float(x.at[int(signal_idx), "ret20"]), 0.18, 0.15)
+            candle_quality = 0.6 * triangle_quality(float(x.at[int(signal_idx), "close_location"]), 0.86, 0.18) + 0.4 * triangle_quality(float(x.at[int(signal_idx), "upper_shadow_pct"]), 0.08, 0.20)
+            volume_quality = triangle_quality(float(x.at[int(signal_idx), "signal_vs_ma5"]), 1.25, 1.8)
+            brick_quality = triangle_quality(min(float(x.at[int(signal_idx), "rebound_ratio"]) if pd.notna(x.at[int(signal_idx), "rebound_ratio"]) else 0.0, 8.0), 4.5, 4.0)
             rows.append(
                 {
                     "date": x.at[int(signal_idx), "date"],
@@ -217,6 +316,24 @@ def build_signal_df(input_dir: Path) -> pd.DataFrame:
                     "ret1_quality": triangle_quality(ret1, 0.03, 0.03),
                     "signal_vs_ma5_quality": triangle_quality(signal_vs_ma5, 1.7, 0.5),
                     "shrink_quality": triangle_quality(pullback_shrink_ratio, 0.8, 0.3),
+                    "trend_quality": trend_quality,
+                    "support_quality": support_quality,
+                    "momentum_quality": momentum_quality,
+                    "candle_quality": candle_quality,
+                    "volume_quality": volume_quality,
+                    "brick_quality": brick_quality,
+                    "trend_spread": float(x.at[int(signal_idx), "trend_spread"]) if pd.notna(x.at[int(signal_idx), "trend_spread"]) else np.nan,
+                    "close_to_trend": float(x.at[int(signal_idx), "close_to_trend"]) if pd.notna(x.at[int(signal_idx), "close_to_trend"]) else np.nan,
+                    "close_to_long": float(x.at[int(signal_idx), "close_to_long"]) if pd.notna(x.at[int(signal_idx), "close_to_long"]) else np.nan,
+                    "RSI14": float(x.at[int(signal_idx), "RSI14"]) if pd.notna(x.at[int(signal_idx), "RSI14"]) else np.nan,
+                    "ret10": float(x.at[int(signal_idx), "ret10"]) if pd.notna(x.at[int(signal_idx), "ret10"]) else np.nan,
+                    "ret20": float(x.at[int(signal_idx), "ret20"]) if pd.notna(x.at[int(signal_idx), "ret20"]) else np.nan,
+                    "upper_shadow_pct": float(x.at[int(signal_idx), "upper_shadow_pct"]) if pd.notna(x.at[int(signal_idx), "upper_shadow_pct"]) else np.nan,
+                    "close_location": float(x.at[int(signal_idx), "close_location"]) if pd.notna(x.at[int(signal_idx), "close_location"]) else np.nan,
+                    "support_above_double_close": bool(x.at[int(signal_idx), "support_above_double_close"]),
+                    "support_above_double_high": bool(x.at[int(signal_idx), "support_above_double_high"]),
+                    "prior_double_bull_20": bool(x.at[int(signal_idx), "prior_double_bull_20"]),
+                    "strong_trend_setup": bool(x.at[int(signal_idx), "strong_trend_setup"]),
                     "pattern_a": bool(x.at[int(signal_idx), "pattern_a"]),
                     "pattern_b": bool(x.at[int(signal_idx), "pattern_b"]),
                 }
@@ -227,25 +344,44 @@ def build_signal_df(input_dir: Path) -> pd.DataFrame:
     if not rows:
         return pd.DataFrame()
     out = pd.DataFrame(rows).sort_values(["date", "code"]).reset_index(drop=True)
-    out["rebound_rank"] = out.groupby("date")["rebound_ratio"].rank(pct=True)
-    out["trend_rank"] = out.groupby("date")["trend_spread_clip"].rank(pct=True)
-    out["shrink_rank"] = out.groupby("date")["shrink_quality"].rank(pct=True)
-    out["sort_score"] = 0.50 * out["shrink_rank"] + 0.30 * out["rebound_rank"] + 0.20 * out["trend_rank"]
+    if mode == "legacy":
+        out["rebound_rank"] = out.groupby("date")["rebound_ratio"].rank(pct=True)
+        out["trend_rank"] = out.groupby("date")["trend_spread_clip"].rank(pct=True)
+        out["shrink_rank"] = out.groupby("date")["shrink_quality"].rank(pct=True)
+        out["sort_score"] = 0.50 * out["shrink_rank"] + 0.30 * out["rebound_rank"] + 0.20 * out["trend_rank"]
+    else:
+        out["trend_rank"] = out.groupby("date")["trend_quality"].rank(pct=True)
+        out["support_rank"] = out.groupby("date")["support_quality"].rank(pct=True)
+        out["momentum_rank"] = out.groupby("date")["momentum_quality"].rank(pct=True)
+        out["candle_rank"] = out.groupby("date")["candle_quality"].rank(pct=True)
+        out["volume_rank"] = out.groupby("date")["volume_quality"].rank(pct=True)
+        out["brick_rank"] = out.groupby("date")["brick_quality"].rank(pct=True)
+        out["sort_score"] = (
+            0.28 * out["trend_rank"]
+            + 0.22 * out["support_rank"]
+            + 0.20 * out["momentum_rank"]
+            + 0.15 * out["candle_rank"]
+            + 0.10 * out["volume_rank"]
+            + 0.05 * out["brick_rank"]
+        )
     out["score_pct_rank"] = out.groupby("date")["sort_score"].rank(pct=True)
     out["daily_rank"] = out.sort_values(["date", "sort_score", "code"], ascending=[True, False, True]).groupby("date").cumcount() + 1
     return out
 
 
-def apply_selection(signal_df: pd.DataFrame) -> pd.DataFrame:
+def apply_selection(signal_df: pd.DataFrame, mode: str = MODE) -> pd.DataFrame:
     if signal_df.empty:
         return signal_df
-    x = signal_df[signal_df["score_pct_rank"] >= PCT_RANK_THRESHOLD].copy()
+    if mode == "legacy":
+        x = signal_df[signal_df["score_pct_rank"] >= PCT_RANK_THRESHOLD].copy()
+    else:
+        x = signal_df[signal_df["score_pct_rank"] >= 0.20].copy()
     x = x.sort_values(["date", "sort_score", "code"], ascending=[True, False, True])
     x["daily_rank"] = x.groupby("date").cumcount() + 1
     return x.groupby("date", group_keys=False).head(TOP_N).reset_index(drop=True)
 
 
-def check(file_path, hold_list=None):
+def check(file_path, hold_list=None, mode: str = MODE):
     df = load_one_csv(str(file_path))
     if df is None or df.empty:
         return [-1]
@@ -254,31 +390,56 @@ def check(file_path, hold_list=None):
     if latest_idx < 0:
         return [-1]
     latest = x.iloc[latest_idx]
-    mask_a = bool(latest["pattern_a"]) and float(latest["rebound_ratio"]) >= 1.2
+    mask_a = bool(latest["pattern_a"]) and float(latest["rebound_ratio"]) >= (1.2 if mode == "legacy" else 0.8)
     mask_b = bool(latest["pattern_b"]) and float(latest["rebound_ratio"]) >= 1.0
-    signal_ok = (
+    legacy_ok = (
         bool(latest["signal_base"])
         and float(latest["ret1"]) <= 0.08
         and (mask_a or mask_b)
         and float(latest["trend_line"]) > float(latest["long_line"])
     )
+    perfect_ok = (
+        (
+            legacy_ok
+            or bool(latest["strong_trend_setup"])
+        )
+        and float(latest["trend_line"]) > float(latest["long_line"])
+        and (-0.03 <= float(latest["ret1"]) <= 0.11)
+    )
+    signal_ok = legacy_ok if mode == "legacy" else perfect_ok
     if not signal_ok:
         return [-1]
     pullback_avg_vol = float(latest["pullback_avg_vol"])
     up_leg_avg_vol = float(latest["up_leg_avg_vol"])
     pullback_shrink_ratio = pullback_avg_vol / up_leg_avg_vol if np.isfinite(up_leg_avg_vol) and up_leg_avg_vol > 0 else np.nan
-    sort_score = (
-        0.50 * triangle_quality(pullback_shrink_ratio, 0.8, 0.3)
-        + 0.30 * 1.0
-        + 0.20 * 1.0
-    )
+    if mode == "legacy":
+        sort_score = (
+            0.50 * triangle_quality(pullback_shrink_ratio, 0.8, 0.3)
+            + 0.30 * 1.0
+            + 0.20 * 1.0
+        )
+    else:
+        trend_quality = triangle_quality(float(latest["trend_spread"]), 0.08, 0.06)
+        support_quality = 1.0 if bool(latest["support_above_double_high"]) else 0.75 if bool(latest["support_above_double_close"]) else 0.45
+        momentum_quality = 0.5 * triangle_quality(float(latest["RSI14"]), 62.0, 12.0) + 0.5 * triangle_quality(float(latest["ret20"]), 0.18, 0.15)
+        candle_quality = 0.6 * triangle_quality(float(latest["close_location"]), 0.86, 0.18) + 0.4 * triangle_quality(float(latest["upper_shadow_pct"]), 0.08, 0.20)
+        volume_quality = triangle_quality(float(latest["signal_vs_ma5"]), 1.25, 1.8)
+        brick_quality = triangle_quality(min(float(latest["rebound_ratio"]) if pd.notna(latest["rebound_ratio"]) else 0.0, 8.0), 4.5, 4.0)
+        sort_score = (
+            0.28 * trend_quality
+            + 0.22 * support_quality
+            + 0.20 * momentum_quality
+            + 0.15 * candle_quality
+            + 0.10 * volume_quality
+            + 0.05 * brick_quality
+        )
     stop_loss_price = round(float(latest["low"]) * 0.99, 3)
     return [1, stop_loss_price, float(latest["close"]), round(sort_score, 4), "brick动量续冲"]
 
 
 def main() -> None:
-    signal_df = build_signal_df(INPUT_DIR)
-    selected_df = apply_selection(signal_df)
+    signal_df = build_signal_df(INPUT_DIR, mode=MODE)
+    selected_df = apply_selection(signal_df, mode=MODE)
     if selected_df.empty:
         return
     latest_trade_date = pd.to_datetime(selected_df["date"]).max()

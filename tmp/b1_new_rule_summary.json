@@ -1,0 +1,22 @@
+{
+  "strategy": "B1",
+  "metrics": {
+    "final_multiple": 0.6221401403218756,
+    "annual_return": -0.10266884508597263,
+    "max_drawdown": 0.5247873667133163,
+    "sharpe": -0.5537324937716419,
+    "volatility": 0.16959989147885343,
+    "days": 1104
+  },
+  "diagnostics": {
+    "signal_count": 4213.0,
+    "filled_buys": 1357.0,
+    "rejected_buys": 1.0,
+    "filled_sells": 1337.0,
+    "rejected_sells": 3.0,
+    "blocked_suspended_buys": 0.0,
+    "blocked_suspended_sells": 0.0,
+    "trade_count": 1337.0
+  },
+  "trade_count": 1337
+}
