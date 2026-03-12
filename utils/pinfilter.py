@@ -1,54 +1,54 @@
-from pathlib import Path
-from utils import stockDataValidator
-from utils import stoploss
-from utils import technical_indicators
+from utils import stoploss, technical_indicators
+import numpy as np
+
+
+def safe_div(a, b):
+    if b is None or not np.isfinite(b) or abs(b) <= 1e-12:
+        return np.nan
+    if a is None or not np.isfinite(a):
+        return np.nan
+    return float(a) / float(b)
+
 
 def check(file_path):
-    '''
-    单针下35
-    '''
-    # 步骤1：取最后一个/后的文件名 → SZ#300319.txt
-    file_name_full = file_path.split('/')[-1]
-    # 步骤2：去掉.txt后缀 → SZ#300319
-    file_name_no_suffix = file_name_full.replace('.txt', '')
-    # 步骤3：取#后的股票代码 → 300319
-    file_name = file_name_no_suffix.split('#')[-1]
-
-    # 计算技术指标
+    """
+    当前最优单针策略：
+    1. 趋势线 > 多空线
+    2. 满足单针条件
+    3. 下影线占比 <= 0.05
+    4. 趋势线近3日斜率 > 0.8%
+    """
     df, load_error = stoploss.load_data(file_path)
-    df_trend = technical_indicators.calculate_trend(df)
-    df_rsi = technical_indicators.calculate_rsi(df)
-
-    if df_trend['知行多空线'].iloc[-1] > df_trend['知行短期趋势线'].iloc[-1]:
+    if load_error or df is None or len(df) < 25:
         return False
 
-    # 找出近2个月最高的n条成交量记录
-    # 按成交量降序排列，取前n行
-    df_60 = df.tail(60)
-    top5_volume_df = df_60.sort_values('成交量', ascending=False).head(2)
-    # 添加"是否阳线"列（阳线：收盘 > 开盘）
-    top5_volume_df['是否阳线'] = top5_volume_df['收盘'] > top5_volume_df['开盘']
-    # 判断前n大成交量是否全部为阳线
-    all_are_bullish = top5_volume_df['是否阳线'].all()
-    
+    df = technical_indicators.calculate_trend(df)
+
     today = df.iloc[-1]
-    yesterday = df.iloc[-2]
+    trend_line = float(today["知行短期趋势线"])
+    long_line = float(today["知行多空线"])
+    if not np.isfinite(trend_line) or not np.isfinite(long_line):
+        return False
+    if trend_line <= long_line:
+        return False
 
-    today_close = today['收盘']
-    today_open = today['开盘']
-    yesterday_close = yesterday['收盘']
-    yesterday_open = yesterday['开盘']
-    today_volume = today['成交量']
-    yesterday_volume = yesterday['成交量']
-    
-    # 计算30日内的最高成交量
-    recent_30_volume = df['成交量'].tail(30)
-    max_30_volume = recent_30_volume.max()
+    if not technical_indicators.caculate_pin(df):
+        return False
 
-    if df_rsi['RSI_14'].iloc[-1] > df_rsi['RSI_28'].iloc[-1] > df_rsi['RSI_57'].iloc[-1]:
-        today_pin_label = technical_indicators.caculate_pin(df)
+    today_open = float(today["开盘"])
+    today_close = float(today["收盘"])
+    today_high = float(today["最高"])
+    today_low = float(today["最低"])
 
-        if today_pin_label and today_volume <= max_30_volume / 2 and today_close < today_open and yesterday_close > yesterday_open and all_are_bullish:
-            return True
+    full_range = today_high - today_low
+    body_low = min(today_open, today_close)
+    lower_shadow_ratio = safe_div(body_low - today_low, full_range)
+    if not np.isfinite(lower_shadow_ratio) or lower_shadow_ratio > 0.05:
+        return False
 
+    prev_trend = float(df["知行短期趋势线"].iloc[-4])
+    trend_slope_3 = safe_div(trend_line, prev_trend) - 1.0
+    if not np.isfinite(trend_slope_3) or trend_slope_3 <= 0.008:
+        return False
 
+    return True
