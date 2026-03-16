@@ -126,8 +126,17 @@ sell_df = pd.DataFrame(sell_list, columns=sell_columns)
 hold_df = pd.DataFrame(hold_list, columns=hold_columns)
 
 # 处理单针筛选结果
-pin_columns = ['股票代码']  # 单针筛选结果只包含股票代码
-pin_df = pd.DataFrame(pin_list, columns=pin_columns)
+processed_pin_list = []
+for item in pin_list:
+    if isinstance(item, list):
+        row = item[:2]
+    else:
+        row = [item]
+    if len(row) < 2:
+        row = row + ['']
+    processed_pin_list.append(row)
+pin_columns = ['股票代码', '单针类型']
+pin_df = pd.DataFrame(processed_pin_list, columns=pin_columns)
 
 # 读取holding.yaml文件，获取watch_stocks数据
 import yaml

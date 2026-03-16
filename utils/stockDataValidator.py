@@ -245,6 +245,11 @@ def main(data_dir_before):
     # 打印汇总信息
     print(f"\n汇总统计：")
     print(f"总文件数：{len(report)}")
+    if '状态' not in report.columns:
+        print("正常文件数：0")
+        print("异常文件数：0")
+        return report
+
     print(f"正常文件数：{len(report[report['状态']=='正常'])}")
     print(f"异常文件数：{len(report[report['状态']=='异常'])}")
     
@@ -254,6 +259,8 @@ def main(data_dir_before):
         print(f"\n异常文件详情：")
         for _, row in abnormal_files.iterrows():
             print(f"- {row['文件名']}：{row['异常信息']}")
+
+    return report
 
 if __name__ == "__main__":
     main()

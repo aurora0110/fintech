@@ -20,6 +20,32 @@ def show(input_list, type):
         s = x[1] if len(x) >= 2 else ""
         is_all_chinese = re.fullmatch(r'[\u4e00-\u9fa5]+', str(s)) is not None
         is_all_digit = re.fullmatch(r'^-?\d+(\.\d+)?$', str(s)) is not None  # 兼容小数/负数
+
+        if type == "BRICK" and len(x) >= 9:
+            code = x[0]
+            stop_price = x[1]
+            close_price = x[2]
+            total_score = x[3]
+            positive_score = x[4]
+            negative_score = x[5]
+            positive_detail = x[6]
+            negative_detail = x[7]
+            note = x[8]
+
+            def format_price(price):
+                try:
+                    return f"{float(price):.1f}"
+                except (ValueError, TypeError):
+                    return price
+
+            stop_p = format_price(stop_price)
+            close_p = format_price(close_price)
+            print(
+                f"股票代码{code:<6} | 止损价：{stop_p:<8} | 当日收盘价：{close_p:<8} | 总分：{total_score:<3} | "
+                f"加分：{positive_score:<2} | 扣分：{negative_score:<2} | 加分原因：{positive_detail} | "
+                f"扣分原因：{negative_detail} | 备注：{note}"
+            )
+            continue
         
         # 3.1 处理B1监控（长度4：代码+止损价+收盘价+盈亏比）
         if len(x) >= 4:
@@ -27,6 +53,7 @@ def show(input_list, type):
             stop_price = x[1]
             close_price = x[2]
             profit = x[3]
+            note = x[4] if len(x) >= 5 else ""
             
             # 价格统一保留2位小数（兼容数值/字符串）
             def format_price(price):
@@ -41,13 +68,29 @@ def show(input_list, type):
             profit_str = "请人工判断" if "请人工判断" in str(profit) else profit
             
             # 格式化输出（列对齐，用|分隔）
-            print(f"股票代码{code:<6} | 止损价：{stop_p:<8} | 当日收盘价：{close_p:<10} | 盈亏比粗估：{profit_str}")
+            if note:
+                print(f"股票代码{code:<6} | 止损价：{stop_p:<8} | 当日收盘价：{close_p:<10} | 盈亏比粗估：{profit_str} | 备注：{note}")
+            else:
+                print(f"股票代码{code:<6} | 止损价：{stop_p:<8} | 当日收盘价：{close_p:<10} | 盈亏比粗估：{profit_str}")
         
         # 3.2 处理持有监控（中文操作：止损/持有等）
         elif is_all_chinese and len(x) >= 2:
             print(f"股票代码{x[0]:<6} | 类型：{x[1][-3:-1]:<4} | 操作：{x[1]}")
+
+        # 3.3 处理单针监控（代码 + 类型）
+        elif len(x) >= 2 and type == "单针":
+            recommendation = x[2] if len(x) >= 3 else ""
+            note = x[3] if len(x) >= 4 else ""
+            if recommendation and note:
+                print(f"股票代码{x[0]:<6} | 单针类型：{x[1]} | 推荐顺序：{recommendation} | 备注：{note}")
+            elif recommendation:
+                print(f"股票代码{x[0]:<6} | 单针类型：{x[1]} | 推荐顺序：{recommendation}")
+            elif note:
+                print(f"股票代码{x[0]:<6} | 单针类型：{x[1]} | 备注：{note}")
+            else:
+                print(f"股票代码{x[0]:<6} | 单针类型：{x[1]}")
         
-        # 3.3 异常数据提示
+        # 3.4 异常数据提示
         else:
             print(f"【异常】股票代码{x[0]}：数据格式错误，请检查 → 原始数据：{x}")
     

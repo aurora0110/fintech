@@ -1,3 +1,4 @@
+from functools import lru_cache
 from re import M
 import pandas as pd
 import numpy as np
@@ -9,7 +10,8 @@ def _empty_price_df():
     return pd.DataFrame(columns=PRICE_COLUMNS)
 
 
-def _load_price_data(file_path):
+@lru_cache(maxsize=8192)
+def _load_price_data_cached(file_path):
     """加载通达信导出的日线 txt 文件，返回标准价格列 DataFrame。"""
     numeric_cols = ['开盘', '最高', '最低', '收盘', '成交量', '成交额']
     encodings = ['gbk', 'gb2312', 'utf-8', 'latin-1']
@@ -55,18 +57,37 @@ def _load_price_data(file_path):
     return df
 
 
+def _load_price_data(file_path):
+    # 返回拷贝，避免调用方在缓存对象上原地修改。
+    return _load_price_data_cached(file_path).copy()
+
+
 def calculate_week_price(file_path):
     """
     将通达信日线 txt 数据聚合为周线数据。
     :param file_path: 日线 txt 文件路径
-    :return: 周线 DataFrame，列格式与原始数据一致
+    :return: 周线 DataFrame，列格式与原始数据一致。
+    仅保留完整周：只有周五收盘形成的周K才视为有效。
     """
     df = _load_price_data(file_path)
-    if df.empty:
+    return calculate_week_price_from_df(df)
+
+
+def calculate_week_price_from_df(df):
+    """
+    将标准价格列 DataFrame 聚合为周线数据。
+    仅保留完整周：只有周五收盘形成的周 K 才视为有效。
+    """
+    if df is None or df.empty:
+        return _empty_price_df()
+
+    work = df[PRICE_COLUMNS].copy()
+    work = work.sort_values('日期').drop_duplicates(subset=['日期'], keep='last').reset_index(drop=True)
+    if work.empty:
         return _empty_price_df()
 
     weekly_df = (
-        df.groupby(pd.Grouper(key='日期', freq='W-FRI'))
+        work.groupby(pd.Grouper(key='日期', freq='W-FRI'))
         .agg({
             '日期': 'max',
             '开盘': 'first',
@@ -79,6 +100,10 @@ def calculate_week_price(file_path):
         .dropna(subset=['日期', '开盘', '收盘'])
         .reset_index(drop=True)
     )
+
+    weekly_df = weekly_df[weekly_df['日期'].dt.weekday == 4].copy()
+    if weekly_df.empty:
+        return _empty_price_df()
 
     weekly_df = weekly_df[['日期', '开盘', '最高', '最低', '收盘', '成交量', '成交额']]
     return weekly_df.sort_values('日期').reset_index(drop=True)

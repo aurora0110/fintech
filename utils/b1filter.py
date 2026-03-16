@@ -1,384 +1,427 @@
 from pathlib import Path
-from utils import stockDataValidator
-from utils import stoploss
-from utils import technical_indicators
-from scipy.signal import argrelextrema
+from functools import lru_cache
+
 import numpy as np
+import pandas as pd
 
-def volatility(price1, price2, percent1, percent2, file_name, type):
-    change_pct = (price1 - price2) / price2 * 100
-    change_pct_rounded = round(change_pct, 2)  # 保留2位小数
-    
-    # 判断是否在目标区间内（包含边界值）
-    is_in_range = (change_pct >= -percent1) and (change_pct <= percent2)
+from utils import stoploss, technical_indicators
 
-    if is_in_range:
-        #print(f'{file_name}涨跌幅在目标区间内，涨跌幅为{change_pct_rounded}，达成{type}')
-        return True
 
-# 寻找N型结构的最高价
-def get_last_n_high(df, order=5, ab_period=(3, 15), ab_retracement=(0.03, 0.2), bc_period=(3, 15), ac_deviation=0.05):
-    """
-    核心功能：获取股票最近一个正N型结构的高点（C点）价格
-    正N型结构定义：上涨(A高点)→下跌(B低点)→上涨(C高点)，满足时间/幅度约束
-    
-    参数：
-        df - 股票日线数据DataFrame，必须包含['日期','最高','最低']列
-        order - 局部极值窗口大小，默认5（当前点是前后5天内的极值）
-        ab_period - A到B的时间周期范围，默认(3, 15)（3-15个交易日）
-        ab_retracement - A到B的回调幅度范围，默认(0.03, 0.2)（3%-20%）
-        bc_period - B到C的时间周期范围，默认(3, 15)（3-15个交易日）
-        ac_deviation - C与A的价格偏差，默认0.05（≤5%）
-        
-    返回值：
-        float - 最近N型结构C点的最高价
-        None - 无符合条件的N型结构或输入数据无效
-    """
-    # 检查必要的列
-    required_cols = ['日期', '最高', '最低']
-    for col in required_cols:
-        if col not in df.columns:
-            print(f"错误：DataFrame缺少必要的列 '{col}'")
-            return None
-    
-    # 检查数据量
-    if len(df) < 2 * order + 1:
-        print("警告：数据量不足，无法识别局部极值")
+EPS = 1e-12
+J_RANK_WINDOW = 20
+J_RANK_MAX = 0.10
+WEEKLY_J_RANK_WINDOW = 20
+WEEKLY_J_RANK_MAX = 0.10
+WEEKLY_SLOPE_WEEKS = 3
+PRICE_RANGE_DOWN = 3.0
+PRICE_RANGE_UP = 2.5
+LINE_PULLBACK_TOLERANCE = 2.0
+YANG_OVER_YIN_RATIO = 1.382
+STOP_LOSS_RATIO = 0.97
+
+
+def _stock_code(file_path: str) -> str:
+    return Path(file_path).stem.split("#")[-1]
+
+
+def _within_pct_range(price: float, anchor: float, down_pct: float, up_pct: float) -> bool:
+    if anchor is None or pd.isna(anchor) or abs(anchor) < 1e-9:
+        return False
+    change_pct = (price - anchor) / anchor * 100
+    return (-down_pct) <= change_pct <= up_pct
+
+
+def rolling_last_percentile(series: pd.Series, window: int) -> pd.Series:
+    values = series.astype(float)
+
+    def _pct_last(arr):
+        arr = np.asarray(arr, dtype=float)
+        if len(arr) == 0 or not np.isfinite(arr[-1]):
+            return np.nan
+        valid = arr[np.isfinite(arr)]
+        if len(valid) == 0:
+            return np.nan
+        return float(np.sum(valid <= arr[-1]) / len(valid))
+
+    return values.rolling(window, min_periods=window).apply(_pct_last, raw=True)
+
+
+def _series_slope(series: pd.Series, lookback: int) -> float:
+    if len(series) <= lookback:
+        return np.nan
+    current = float(series.iloc[-1])
+    prev = float(series.iloc[-(lookback + 1)])
+    if not np.isfinite(current) or not np.isfinite(prev) or abs(prev) < EPS:
+        return np.nan
+    return current / prev - 1.0
+
+
+@lru_cache(maxsize=8192)
+def _weekly_screen(file_path: str) -> tuple[bool, str]:
+    weekly_df = technical_indicators.calculate_week_price(file_path)
+    return _evaluate_weekly_screen_df(weekly_df)
+
+
+def _evaluate_weekly_screen_df(weekly_df: pd.DataFrame) -> tuple[bool, str]:
+    if weekly_df is None or weekly_df.empty or len(weekly_df) < WEEKLY_SLOPE_WEEKS + 1:
+        return False, ""
+
+    weekly_df = technical_indicators.calculate_trend(weekly_df.copy())
+    weekly_df = technical_indicators.calculate_kdj(weekly_df)
+    weekly_df = technical_indicators.calculate_daily_ma(weekly_df)
+
+    last = weekly_df.iloc[-1]
+    trend_line = float(last["知行短期趋势线"]) if pd.notna(last["知行短期趋势线"]) else np.nan
+    long_line = float(last["知行多空线"]) if pd.notna(last["知行多空线"]) else np.nan
+    close_price = float(last["收盘"]) if pd.notna(last["收盘"]) else np.nan
+
+    ma20_slope = _series_slope(weekly_df["MA20"], WEEKLY_SLOPE_WEEKS)
+    ma30_slope = _series_slope(weekly_df["MA30"], WEEKLY_SLOPE_WEEKS)
+    ma60_slope = _series_slope(weekly_df["MA60"], WEEKLY_SLOPE_WEEKS)
+
+    if not np.isfinite(trend_line) or not np.isfinite(long_line) or not np.isfinite(close_price):
+        return False, ""
+    if not np.isfinite(ma20_slope) or not np.isfinite(ma30_slope):
+        return False, ""
+    if trend_line <= long_line:
+        return False, ""
+    if ma20_slope <= 0 or ma30_slope <= 0:
+        return False, ""
+
+    weekly_reason = ""
+    if close_price >= trend_line:
+        weekly_reason = "周线强势"
+    elif close_price < trend_line and close_price >= long_line:
+        weekly_reason = "周线进碗"
+    else:
+        return False, ""
+
+    extras = []
+    weekly_j_rank20 = rolling_last_percentile(weekly_df["J"], WEEKLY_J_RANK_WINDOW)
+    current_weekly_j_rank20 = (
+        float(weekly_j_rank20.iloc[-1])
+        if len(weekly_j_rank20) > 0 and pd.notna(weekly_j_rank20.iloc[-1])
+        else np.nan
+    )
+    if np.isfinite(current_weekly_j_rank20) and current_weekly_j_rank20 < WEEKLY_J_RANK_MAX:
+        extras.append("周J低位")
+    if np.isfinite(ma60_slope) and ma60_slope > 0:
+        extras.append("周MA60上行")
+
+    if extras:
+        return True, f"{weekly_reason}+{'+'.join(extras)}"
+    return True, weekly_reason
+
+
+def weekly_screen(file_path: str) -> tuple[bool, str]:
+    """供其他策略复用的周线筛选。"""
+    return _weekly_screen(file_path)
+
+
+def weekly_screen_from_weekly_df(weekly_df: pd.DataFrame) -> tuple[bool, str]:
+    return _evaluate_weekly_screen_df(weekly_df)
+
+
+def weekly_screen_from_daily_df(daily_df: pd.DataFrame) -> tuple[bool, str]:
+    weekly_df = technical_indicators.calculate_week_price_from_df(daily_df)
+    return _evaluate_weekly_screen_df(weekly_df)
+
+
+def _local_extrema_indices(values: np.ndarray, order: int, mode: str) -> np.ndarray:
+    if len(values) < 2 * order + 1:
+        return np.array([], dtype=int)
+
+    indices = []
+    for idx in range(order, len(values) - order):
+        center = values[idx]
+        left = values[idx - order: idx]
+        right = values[idx + 1: idx + order + 1]
+        neighbors = np.concatenate([left, right])
+        if np.isnan(center) or np.isnan(neighbors).any():
+            continue
+        if mode == "max" and np.all(center > neighbors):
+            indices.append(idx)
+        if mode == "min" and np.all(center < neighbors):
+            indices.append(idx)
+    return np.array(indices, dtype=int)
+
+
+def get_last_n_high(
+    df: pd.DataFrame,
+    order: int = 5,
+    ab_period: tuple[int, int] = (3, 15),
+    ab_retracement: tuple[float, float] = (0.03, 0.2),
+    bc_period: tuple[int, int] = (3, 15),
+    ac_deviation: float = 0.05,
+):
+    """获取最近一个正N结构的C点价格。"""
+    required_cols = {"日期", "最高", "最低"}
+    if not required_cols.issubset(df.columns):
         return None
-    
-    # 1. 数据时间排序：按日期列升序排列数据
-    df = df.sort_values('日期')
-    
-    try:
-        # 2. 识别所有局部高点的索引
-        h_idx = argrelextrema(df['最高'].values, np.greater, order=order)[0]
-        
-        # 3. 识别所有局部低点的索引
-        l_idx = argrelextrema(df['最低'].values, np.less, order=order)[0]
-        
-        # 4. 整理高点数据为列表：[(位置索引, 最高价)]
-        highs = [(i, df.loc[i, '最高']) for i in h_idx]
-        
-        # 5. 整理低点数据为列表：[(位置索引, 最低价)]
-        lows = [(i, df.loc[i, '最低']) for i in l_idx]
-        
-        # 检查是否有高低点数据
-        if not highs:
-            print("警告：未找到局部高点")
-            return None
-        
-        if not lows:
-            print("警告：未找到局部低点")
-            return None
-        
-        # 6. 倒序遍历所有高点（从最新的高点开始）
-        for a_pos, a_p in reversed(highs):
-            # 7. 筛选A点之后符合条件的B点
-            bs = [(l_pos, l_p) for l_pos, l_p in lows if l_pos > a_pos and 
-                  ab_period[0] <= l_pos - a_pos <= ab_period[1] and 
-                  ab_retracement[0] <= (a_p - l_p) / a_p <= ab_retracement[1]]
-            
-            # 8. 遍历所有符合条件的B点
-            for b_pos, b_p in bs:
-                # 9. 筛选B点之后符合条件的C点
-                cs = [(h_pos, h_p) for h_pos, h_p in highs if h_pos > b_pos and 
-                      bc_period[0] <= h_pos - b_pos <= bc_period[1] and 
-                      h_p > b_p and abs(h_p - a_p) / a_p <= ac_deviation]
-                
-                # 10. 若找到符合条件的C点，返回最近的C点价格
-                if cs:
-                    return max(cs, key=lambda x: x[0])[1]
-        
-        # 11. 若遍历完所有高低点都未找到符合条件的N型结构，返回None
-        return None
-        
-    except Exception as e:
-        print(f"处理过程中出错：{str(e)}")
+
+    work = df.sort_values("日期").reset_index(drop=True)
+    highs_idx = _local_extrema_indices(work["最高"].to_numpy(dtype=float), order=order, mode="max")
+    lows_idx = _local_extrema_indices(work["最低"].to_numpy(dtype=float), order=order, mode="min")
+
+    if len(highs_idx) == 0 or len(lows_idx) == 0:
         return None
 
-def check(file_path, hold_list):
-    # 步骤1：取最后一个/后的文件名 → SZ#300319.txt
-    file_name_full = file_path.split('/')[-1]
-    # 步骤2：去掉.txt后缀 → SZ#300319
-    file_name_no_suffix = file_name_full.replace('.txt', '')
-    # 步骤3：取#后的股票代码 → 300319
-    file_name = file_name_no_suffix.split('#')[-1]
+    highs = [(int(i), float(work.at[i, "最高"])) for i in highs_idx]
+    lows = [(int(i), float(work.at[i, "最低"])) for i in lows_idx]
 
-    # 计算技术指标
-    df, load_error = stoploss.load_data(file_path)
-    df_trend = technical_indicators.calculate_trend(df)
-    df_kdj = technical_indicators.calculate_kdj(df)
-    df_rsi = technical_indicators.calculate_rsi(df)
-    df_ma = technical_indicators.calculate_daily_ma(df)
+    for a_pos, a_price in reversed(highs):
+        candidate_bs = [
+            (l_pos, l_price)
+            for l_pos, l_price in lows
+            if l_pos > a_pos
+            and ab_period[0] <= l_pos - a_pos <= ab_period[1]
+            and ab_retracement[0] <= (a_price - l_price) / a_price <= ab_retracement[1]
+        ]
+        for b_pos, b_price in candidate_bs:
+            candidate_cs = [
+                (h_pos, h_price)
+                for h_pos, h_price in highs
+                if h_pos > b_pos
+                and bc_period[0] <= h_pos - b_pos <= bc_period[1]
+                and h_price > b_price
+                and abs(h_price - a_price) / a_price <= ac_deviation
+            ]
+            if candidate_cs:
+                return max(candidate_cs, key=lambda x: x[0])[1]
+    return None
+
+
+def _is_low_volume_low_price(df: pd.DataFrame) -> bool:
+    for period in (5, 10, 20, 30):
+        recent_volume = df["成交量"].iloc[-(period + 1):-1] if len(df) >= period + 1 else df["成交量"].iloc[:-1]
+        recent_close = df["收盘"].iloc[-(period + 1):-1] if len(df) >= period + 1 else df["收盘"].iloc[:-1]
+        if recent_volume.empty or recent_close.empty:
+            continue
+        if float(df["成交量"].iloc[-1]) < float(recent_volume.min()) and float(df["收盘"].iloc[-1]) < float(recent_close.min()):
+            return True
+    return False
+
+
+def _pullback_to_key_lines(df: pd.DataFrame, df_trend: pd.DataFrame, df_ma: pd.DataFrame) -> tuple[bool, bool]:
+    today_low = float(df["最低"].iloc[-1])
+    ma_pullback = any(
+        _within_pct_range(today_low, float(df_ma[col].iloc[-1]), LINE_PULLBACK_TOLERANCE, LINE_PULLBACK_TOLERANCE)
+        for col in ("MA20", "MA60")
+    )
+    trend_pullback = any(
+        _within_pct_range(today_low, float(df_trend[col].iloc[-1]), LINE_PULLBACK_TOLERANCE, LINE_PULLBACK_TOLERANCE)
+        for col in ("知行多空线", "知行短期趋势线")
+    )
+    return ma_pullback, trend_pullback
+
+
+def _is_sb1(today: pd.Series, yesterday: pd.Series, df_kdj: pd.DataFrame) -> bool:
+    return (
+        float(today["收盘"]) < float(today["开盘"]) < float(yesterday["收盘"])
+        and float(df_kdj["J"].iloc[-1]) < 0
+        and float(df_kdj["J"].iloc[-2]) < 0
+    )
+
+
+def _recent_max_volume_is_bullish(df: pd.DataFrame) -> bool:
+    recent = df.tail(60)
+    if recent.empty:
+        return False
+    top_row = recent.sort_values("成交量", ascending=False).head(1)
+    if top_row.empty:
+        return False
+    return bool((top_row["收盘"] > top_row["开盘"]).all())
+
+
+def _bullish_volume_dominance(df: pd.DataFrame) -> bool:
+    recent = df.tail(60).copy()
+    recent["阳线成交量"] = np.where(recent["收盘"] > recent["开盘"], recent["成交量"], 0.0)
+    recent["阴线成交量"] = np.where(recent["收盘"] < recent["开盘"], recent["成交量"], 0.0)
+    yang_sum = recent["阳线成交量"].tail(30).sum()
+    yin_sum = recent["阴线成交量"].tail(30).sum()
+    if yin_sum <= 1e-9:
+        return yang_sum > 0
+    return yang_sum > yin_sum * YANG_OVER_YIN_RATIO
+
+
+def _first_pullback_after_cross(df: pd.DataFrame, df_trend: pd.DataFrame) -> bool:
+    trend_line = df_trend["知行短期趋势线"]
+    long_line = df_trend["知行多空线"]
+    cross_idx = None
+    for idx in range(1, len(df)):
+        if trend_line.iloc[idx - 1] < long_line.iloc[idx - 1] and trend_line.iloc[idx] > long_line.iloc[idx]:
+            cross_idx = idx
+    if cross_idx is None:
+        return False
+
+    seen_pullback = False
+    for idx in range(cross_idx + 1, len(df)):
+        low_price = float(df["最低"].iloc[idx])
+        near_long = _within_pct_range(low_price, float(long_line.iloc[idx]), LINE_PULLBACK_TOLERANCE, LINE_PULLBACK_TOLERANCE)
+        near_trend = _within_pct_range(low_price, float(trend_line.iloc[idx]), LINE_PULLBACK_TOLERANCE, LINE_PULLBACK_TOLERANCE)
+        if not (near_long or near_trend):
+            continue
+        if idx == len(df) - 1 and not seen_pullback:
+            return True
+        seen_pullback = True
+    return False
+
+
+def _has_gap_up_followed_by_big_bullish(df: pd.DataFrame, df_trend: pd.DataFrame) -> bool:
+    recent = df.tail(20).reset_index(drop=True)
+    recent_trend = df_trend.tail(20).reset_index(drop=True)
+    if len(recent) < 3:
+        return False
+
+    for idx in range(1, len(recent)):
+        if float(recent.at[idx, "收盘"]) <= float(recent.at[idx - 1, "最高"]):
+            continue
+        if float(recent_trend.at[idx, "知行多空线"]) <= float(recent_trend.at[idx, "知行短期趋势线"]):
+            continue
+
+        gap_close = float(recent.at[idx, "收盘"])
+        if not bool((recent.loc[idx:, "收盘"] >= gap_close).all()):
+            continue
+
+        for jdx in range(idx + 1, len(recent)):
+            prev_close = float(recent.at[jdx - 1, "收盘"])
+            current_close = float(recent.at[jdx, "收盘"])
+            prev_volume = float(recent.at[jdx - 1, "成交量"])
+            current_volume = float(recent.at[jdx, "成交量"])
+            if prev_close <= 0 or prev_volume <= 0:
+                continue
+            change_pct = (current_close - prev_close) / prev_close * 100
+            volume_ratio = current_volume / prev_volume
+            if change_pct >= 8 and volume_ratio >= 3:
+                return True
+    return False
+
+
+def _has_long_negative_short_volume(df: pd.DataFrame) -> bool:
+    if len(df) < 30:
+        return False
+    current = df.iloc[-1]
+    prev = df.iloc[-2]
+    prev_diff_pct = abs((float(prev["收盘"]) - float(prev["开盘"])) / float(prev["开盘"])) * 100
+    current_diff_pct = abs((float(current["收盘"]) - float(current["开盘"])) / float(current["开盘"])) * 100
+    max_30_volume = float(df["成交量"].tail(30).max())
+    return (
+        prev_diff_pct < 2
+        and current_diff_pct > 4
+        and float(current["成交量"]) < float(prev["成交量"])
+        and float(current["成交量"]) < max_30_volume / 2
+    )
+
+
+def _filter_reason(
+    sb1: bool,
+    ma_pullback: bool,
+    trend_pullback: bool,
+    first_pullback: bool,
+    low_volume_low_price: bool,
+    gap_up: bool,
+    long_negative: bool,
+    declining_volume: bool,
+    consistent: bool,
+) -> str:
+    if sb1 and consistent:
+        return "SB1条件"
+    if ma_pullback:
+        return "回踩均线"
+    if trend_pullback:
+        return "回踩趋势线"
+    if first_pullback:
+        return "第一次回踩"
+    if low_volume_low_price:
+        return "地量低价"
+    if gap_up:
+        return "跳空K线"
+    if long_negative:
+        return "长阴短柱"
+    if declining_volume and consistent:
+        return "缩量且涨幅一致"
+    return "其他原因"
+
+
+def check(file_path, hold_list, feature_cache=None):
+    del hold_list
+
+    if feature_cache is not None:
+        bundle = feature_cache.b1_daily_bundle()
+        if bundle is None:
+            return [-1]
+        df = bundle["df"].copy()
+        df_trend = bundle["df_trend"].copy()
+        df_kdj = bundle["df_kdj"].copy()
+        df_ma = bundle["df_ma"].copy()
+        weekly_ok, weekly_reason = feature_cache.weekly_screen()
+    else:
+        df, load_error = stoploss.load_data(file_path)
+        if load_error or df is None or len(df) < 120:
+            return [-1]
+        weekly_ok, weekly_reason = weekly_screen(file_path)
+        df_trend = technical_indicators.calculate_trend(df.copy())
+        df_kdj = technical_indicators.calculate_kdj(df.copy())
+        df_ma = technical_indicators.calculate_daily_ma(df.copy())
+    if not weekly_ok:
+        return [-1]
+
+    stock_code = _stock_code(file_path)
 
     today = df.iloc[-1]
     yesterday = df.iloc[-2]
 
-    volume_label = False
-    declining_volume_label = False
-    consistent_label = False
-    low_volume_price_label = False
-    pullback_ma_label = False
-    pullback_trend_label = False
-    SB1_label = False
-    shrink_volume_label = False
-    df_dk = df_trend['知行多空线'].iloc[-1]
-    df_qs = df_trend['知行短期趋势线'].iloc[-1]
+    trend_line = float(df_trend["知行短期趋势线"].iloc[-1])
+    long_line = float(df_trend["知行多空线"].iloc[-1])
+    j_rank20 = rolling_last_percentile(df_kdj["J"], J_RANK_WINDOW)
+    current_j_rank20 = float(j_rank20.iloc[-1]) if pd.notna(j_rank20.iloc[-1]) else np.nan
 
-    # 标记阳线/阴线：阳线=收盘>开盘，阴线=收盘<开盘（平盘忽略）
-    df['是否阳线'] = df['收盘'] > df['开盘']
-    df['是否阴线'] = df['收盘'] < df['开盘']
-
-    if df_dk > df_qs:
-        #print(f"{file_name}当前J值为：{df_kdj['J'].iloc[-1].round(2)}, 多空线{df_dk}，趋势线{df_qs}")
+    if long_line > trend_line:
         return [-1]
+    if not np.isfinite(current_j_rank20) or current_j_rank20 >= J_RANK_MAX:
+        return [-1]
+
+    today_close = today["收盘"]
+    today_open = today["开盘"]
+    yesterday_close = yesterday["收盘"]
+    today_low = today["最低"]
+
+    declining_volume = float(df["成交量"].iloc[-1]) < float(df["成交量"].iloc[-2])
+    consistent = _within_pct_range(float(today_close), float(yesterday_close), PRICE_RANGE_DOWN, PRICE_RANGE_UP)
+    low_volume_low_price = _is_low_volume_low_price(df)
+    ma_pullback, trend_pullback = _pullback_to_key_lines(df, df_trend, df_ma)
+    sb1 = _is_sb1(today, yesterday, df_kdj)
+    all_bullish = _recent_max_volume_is_bullish(df)
+    bullish_volume_ok = _bullish_volume_dominance(df)
+    first_pullback = _first_pullback_after_cross(df, df_trend)
+    gap_up = _has_gap_up_followed_by_big_bullish(df, df_trend)
+    long_negative = _has_long_negative_short_volume(df)
+
+    trigger = ma_pullback or trend_pullback or first_pullback or low_volume_low_price or gap_up or long_negative
+    passed = (sb1 and all_bullish and bullish_volume_ok) or (
+        trigger and consistent and declining_volume and all_bullish and bullish_volume_ok
+    )
+    if not passed:
+        return [-1]
+
+    daily_reason = _filter_reason(
+        sb1=sb1,
+        ma_pullback=ma_pullback,
+        trend_pullback=trend_pullback,
+        first_pullback=first_pullback,
+        low_volume_low_price=low_volume_low_price,
+        gap_up=gap_up,
+        long_negative=long_negative,
+        declining_volume=declining_volume,
+        consistent=consistent,
+    )
+    filter_reason = f"周线：{weekly_reason} | 日线：{daily_reason}"
+
+    stop_loss_price = np.round(min(float(yesterday["最低"]), float(today_low)) * STOP_LOSS_RATIO, 1)
+    near_high_price = get_last_n_high(df)
+    if near_high_price and near_high_price > stop_loss_price and float(today_close) > stop_loss_price:
+        ratio = np.round((near_high_price - float(today_close)) / (float(today_close) - stop_loss_price), 1)
     else:
-        if float(df_kdj['J'].iloc[-1]) < 13:
-            # 1、判断是否缩量
-            if float(df['成交量'].iloc[-1]) < float(df['成交量'].iloc[-2]):
-                #print(f'{file_name}且缩量')
-                declining_volume_label = True
+        ratio = "请人工判断盈亏比！"
 
-            # 2、判断涨幅是否达成一致
-            today_close = today['收盘']    # 今日收盘价（最新）
-            today_open = today['开盘']
-            yesterday_close = yesterday['收盘']# 今日开盘价
-            consistent_label = volatility(today_close, yesterday_close, 3, 2.5, file_name, '一致')
-            
-            # 3、判断是否地量低价
-            result = {}
-            # 遍历5/10/20/30周期，判断是否大于对应周期最大值
-            for period in [5, 10, 20, 30]:
-                # 截取最近period行（排除最后一行），不足则取所有历史行
-                recent_volume_data = df["成交量"].iloc[-(period+1):-1] if len(df)>=period+1 else df["成交量"].iloc[:-1]
-                recent_close_data = df["收盘"].iloc[-(period+1):-1] if len(df)>=period+1 else df["收盘"].iloc[:-1]
-
-                result[f'{file_name}今日是否最近{period}天的地量低价'] = (df["成交量"].iloc[-1] < recent_volume_data.min() if not recent_volume_data.empty else False) and (df["收盘"].iloc[-1] < recent_close_data.min() if not recent_close_data.empty else False)
-
-            for k, v in result.items():
-                if v:
-                    #print(f"{k}：{'是' if v else '否'}")
-                    low_volume_price_label = True
-            
-            # 4、判断是否回踩均线、黄白线
-            today_low = df['最低'].iloc[-1]
-            today_ma20 = df_ma['MA20'].iloc[-1]
-            today_ma60 = df_ma['MA60'].iloc[-1]
-            today_yellow = df_trend['知行多空线'].iloc[-1]
-            today_white = df_trend['知行短期趋势线'].iloc[-1]
-
-            volatility_ma20_label = volatility(today_low, today_ma20, 2, 2, file_name, '20日线回踩')
-            volatility_ma60_label = volatility(today_low, today_ma60, 2, 2, file_name, '60日线回踩')
-            volatility_yellow_label = volatility(today_low, today_yellow, 2, 2, file_name, '黄线回踩')
-            volatility_white_label = volatility(today_low, today_white, 2, 2, file_name, '白线回踩')
-            
-            if volatility_ma20_label or volatility_ma60_label:
-                pullback_ma_label = True
-            if volatility_yellow_label or volatility_white_label:
-                pullback_trend_label = True
-
-            # 5、判断是否SB1
-            SB1_label = (float(today_close) < float(today_open) < float(yesterday['收盘'])) and (df_kdj['J'].iloc[-1] < 0 and df_kdj['J'].iloc[-2] < 0)
-            if SB1_label:
-                #print(f"发现SB1: {file_name} :{today_close} {today_open} {yesterday['收盘']} {df_kdj['J'].iloc[-1]}")
-                SB1_label = True   
-
-            #  找出近2个月最高的n条成交量记录
-            # 按成交量降序排列，取前n行
-            df_60 = df.tail(60)
-            top5_volume_df = df_60.sort_values('成交量', ascending=False).head(1)
-            # 添加"是否阳线"列（阳线：收盘 > 开盘）
-            top5_volume_df['是否阳线'] = top5_volume_df['收盘'] > top5_volume_df['开盘']
-            # 判断前5大成交量是否全部为阳线
-            all_are_bullish = top5_volume_df['是否阳线'].all()  
-
-            # 6、判断近30天阴线、阳线成交量是否符合黄金分割比例
-            df_60['K线类型'] = np.where(df_60['收盘'] > df_60['开盘'], 1,  # 阳线
-                                    np.where(df_60['收盘'] < df_60['开盘'], -1, 0))  # 阴线/平盘
-
-            # 步骤2：分别生成阳线、阴线的成交量列（非对应K线则成交量为0）
-            df_60['阳线成交量'] = np.where(df_60['K线类型'] == 1, df_60['成交量'], 0)
-            df_60['阴线成交量'] = np.where(df_60['K线类型'] == -1, df_60['成交量'], 0)
-
-            # 步骤3：滚动计算最近30条数据的阳/阴线累计成交量（min_periods=1：不足30条也计算，可改为30强制满30条）
-            df_60['30日阳线累计成交量'] = df_60['阳线成交量'].rolling(window=30, min_periods=1).sum()
-            df_60['30日阴线累计成交量'] = df_60['阴线成交量'].rolling(window=30, min_periods=1).sum()
-
-            # 步骤4：核心判断：阳线累计成交量 > 阴线累计成交量×1.3（处理阴线累计为0的情况，避免除0/误判）
-            # 阴线累计为0时，若有阳线则直接判定为True（无阴线，阳线自然满足倍数）
-            df_60['量能满足条件'] = np.where(
-                df_60['30日阴线累计成交量'] == 0,
-                df_60['30日阳线累计成交量'] > 0,  # 无阴线时，有阳线则True
-                df_60['30日阳线累计成交量'] > df_60['30日阴线累计成交量'] * 1.382  # 有阴线时，判断1.3倍
-            ) 
-
-
-            # 7、判断知行短期趋势线第一次上穿知行多空线后，当前价格是否第一次回踩
-            first_pullback_after_cross_label = False
-            try:
-                # 获取完整的趋势线数据
-                qs_line = df_trend['知行短期趋势线']
-                dk_line = df_trend['知行多空线']
-                
-                # 找到最近一次知行短期趋势线上穿知行多空线的日期
-                cross_date = None
-                for i in range(1, len(df_trend)):
-                    # 前一天短期趋势线低于多空线，当天短期趋势线高于多空线
-                    if qs_line.iloc[i-1] < dk_line.iloc[i-1] and qs_line.iloc[i] > dk_line.iloc[i]:
-                        cross_date = i  # 记录上穿的索引
-                
-                if cross_date is not None:
-                    # 检查上穿后是否第一次回踩
-                    # 遍历上穿后到当前的所有数据点
-                    has_pullback_before = False
-                    for j in range(cross_date + 1, len(df)):
-                        # 检查该点是否回踩了多空线或短期趋势线
-                        low_j = df['最低'].iloc[j]
-                        dk_j = dk_line.iloc[j]
-                        qs_j = qs_line.iloc[j]
-                        
-                        # 使用volatility函数判断是否回踩（2%范围内）
-                        pullback_dk = volatility(low_j, dk_j, 2, 2, file_name, '回踩多空线')
-                        pullback_qs = volatility(low_j, qs_j, 2, 2, file_name, '回踩短期趋势线')
-                        
-                        if pullback_dk or pullback_qs:
-                            # 如果当前是最后一个点（今天），且之前没有回踩过，则标记为第一次回踩
-                            if j == len(df) - 1 and not has_pullback_before:
-                                first_pullback_after_cross_label = True
-                            else:
-                                # 之前已经有回踩过，不是第一次
-                                has_pullback_before = True
-            except Exception as e:
-                print(f"计算第一次回踩标签时出错：{str(e)}")
-                first_pullback_after_cross_label = False
-
-            # 8、判断最近一个月内是否存在跳空K线，且后续K线收盘价从未跌破这根跳空K线的收盘价，且跳空K线之后有放量大阳线
-            gap_up_label = False
-            try:
-                # 取最近一个月的数据（约20个交易日）
-                recent_df = df.tail(20)
-                # 获取对应的趋势线数据
-                recent_trend_df = df_trend.tail(20)
-                
-                # 遍历最近一个月的数据，寻找跳空K线
-                for i in range(1, len(recent_df)):
-                    # 跳空条件：当天收盘价 > 前一天最高价
-                    if recent_df['收盘'].iloc[i] > recent_df['最高'].iloc[i-1]:
-                        # 跳空K线的位置是知行多空线大于知行短期趋势线
-                        if recent_trend_df['知行多空线'].iloc[i] > recent_trend_df['知行短期趋势线'].iloc[i]:
-                            # 记录跳空K线的收盘价
-                            gap_close = recent_df['收盘'].iloc[i]
-                            
-                            # 检查后续K线是否从未跌破这根跳空K线的收盘价
-                            subsequent_close = recent_df['收盘'].iloc[i:]
-                            if all(subsequent_close >= gap_close):
-                                # 检查跳空K线之后是否有放量大阳线
-                                # 遍历从跳空K线之后到最近的数据点
-                                has_big_bullish = False
-                                for j in range(i+1, len(recent_df)):
-                                    # 计算当日涨幅（昨日收盘价和今日收盘价的涨幅）
-                                    prev_close = recent_df['收盘'].iloc[j-1]
-                                    current_close = recent_df['收盘'].iloc[j]
-                                    change_pct = (current_close - prev_close) / prev_close * 100
-                                    
-                                    # 计算成交量是否是前一天的3倍以上
-                                    current_volume = recent_df['成交量'].iloc[j]
-                                    prev_volume = recent_df['成交量'].iloc[j-1]
-                                    volume_ratio = current_volume / prev_volume
-                                    
-                                    # 大阳线条件：涨幅大于等于8%
-                                    # 放量条件：成交量是前一天的3倍以上
-                                    if change_pct >= 8 and volume_ratio >= 3:
-                                        has_big_bullish = True
-                                        #print(f"发现放量大阳线: {file_name}，日期: {recent_df['日期'].iloc[j]}，涨幅: {change_pct:.2f}%，成交量比: {volume_ratio:.2f}")
-                                        break
-                                
-                                # 如果跳空K线之后有放量大阳线，则标记为符合条件
-                                if has_big_bullish:
-                                    gap_up_label = True
-                                    #print(f"发现符合条件的跳空K线: {file_name}，日期: {recent_df['日期'].iloc[i]}，收盘价: {gap_close}")
-                                    break
-            except Exception as e:
-                print(f"检查最新一日趋势线关系时出错：{str(e)}")
-                gap_up_label = False
-            
-            # 10、增加长阴短柱筛选条件
-            long_negative_label = False
-            try:
-                # 获取当日和前一日的数据
-                current_day = df.iloc[-1]
-                prev_day = df.iloc[-2]
-                
-                # 计算前一日的收盘价和开盘价的差幅
-                prev_open = prev_day['开盘']
-                prev_close = prev_day['收盘']
-                prev_diff_pct = abs((prev_close - prev_open) / prev_open) * 100
-                
-                # 计算当日的收盘价和开盘价的差幅
-                current_open = current_day['开盘']
-                current_close = current_day['收盘']
-                current_diff_pct = abs((current_close - current_open) / current_open) * 100
-                
-                # 计算当日和前一日的成交量
-                current_volume = current_day['成交量']
-                prev_volume = prev_day['成交量']
-                
-                # 计算30日内的最高成交量
-                recent_30_volume = df['成交量'].tail(30)
-                max_30_volume = recent_30_volume.max()
-                
-                # 长阴短柱条件：
-                # 1. 前一日的收盘价和开盘价的差幅小于2%
-                # 2. 当日的收盘价和开盘价的差幅大于4%
-                # 3. 当日的成交量小于前一日的成交量
-                # 4. 当日的成交量小于30日内最高成交量的一半
-                if (prev_diff_pct < 2 and 
-                    current_diff_pct > 4 and 
-                    current_volume < prev_volume and 
-                    current_volume < max_30_volume / 2):
-                    long_negative_label = True
-                    #print(f"发现长阴短柱: {file_name}，当日差幅: {current_diff_pct:.2f}%，前一日差幅: {prev_diff_pct:.2f}%")
-            except Exception as e:
-                print(f"计算长阴短柱标签时出错：{str(e)}")
-                long_negative_label = False
-
-            if (SB1_label and all_are_bullish and df_60['量能满足条件'].iloc[-1]) or ((pullback_ma_label or pullback_trend_label or first_pullback_after_cross_label or low_volume_price_label or first_pullback_after_cross_label or gap_up_label or long_negative_label) and consistent_label and declining_volume_label and all_are_bullish and df_60['量能满足条件'].iloc[-1]): #   
-                # 确定筛选原因
-                filter_reason = ""
-                if SB1_label and consistent_label:
-                    filter_reason = "SB1条件"
-                elif pullback_ma_label:
-                    filter_reason = "回踩均线"
-                elif pullback_trend_label:
-                    filter_reason = "回踩趋势线"
-                elif first_pullback_after_cross_label:
-                    filter_reason = "第一次回踩"
-                elif low_volume_price_label:
-                    filter_reason = "地量低价"
-                elif gap_up_label:
-                    filter_reason = "跳空K线"
-                elif long_negative_label:
-                    filter_reason = "长阴短柱"
-                elif declining_volume_label and consistent_label:
-                    filter_reason = "缩量且涨幅一致"
-                else:
-                    filter_reason = "其他原因"
-                
-                #若是，给出买入信号、止损价（或止损类型）、盈亏比、买入价格、筛选原因
-                stop_loss_price = (min(yesterday['最低'], today_low) * 0.97).round(1)
-                # 寻找N型结构的最高价
-                near_high_price = get_last_n_high(df)
-                #print(f"买入信号：{file_name}，买入价格：{today_close}，止损价：{stop_loss_price}，最高价：{near_high_price}，",min(yesterday['最低'], today_low),min(yesterday['最低'], today_low).round(1))
-                if near_high_price and near_high_price > stop_loss_price:
-                    ratio = ((near_high_price - today_close) / (today_close - stop_loss_price)).round(1)
-                else:
-                    ratio = "请人工判断盈亏比！"
-                #print(f"{file_name}B1筛选通过，最近的N型高价为{near_high_price}，止损价格为{stop_loss_price}")
-                return [1, stop_loss_price, today_close, ratio, filter_reason]
-            else:
-                return [-1]
-        else:
-            return [-1]
-
-
-
+    return [1, stop_loss_price, today_close, ratio, filter_reason]
