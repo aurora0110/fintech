@@ -1,0 +1,39 @@
+{
+  "base_signal_trade_metrics": {
+    "sample_count": 956,
+    "positive_return_rate": 0.33368200836820083,
+    "quality_success_rate": 0.32426778242677823,
+    "take_profit_hit_rate": 0.0,
+    "stop_loss_rate": 0.6705020920502092,
+    "avg_return": -0.0028892210050035128,
+    "median_return": -0.03333260218638527,
+    "avg_win_return": 0.09160180513896526,
+    "avg_loss_return": -0.05020890285732069,
+    "profit_loss_ratio": 1.8244135985060523,
+    "expectancy": -0.0028892210050035128,
+    "return_std": 0.08316267443506559,
+    "downside_std": 0.030164787825214843,
+    "sharpe_trade": -0.03474180002784123,
+    "sortino_trade": -0.09578124738501902,
+    "best_trade": 0.506158978636043,
+    "worst_trade": -0.3727529476128355,
+    "trade_sequence_max_drawdown": 0.9996602498934354,
+    "max_consecutive_wins": 8,
+    "max_consecutive_losses": 24,
+    "avg_holding_days": 11.035564853556485,
+    "median_holding_days": 8.0
+  },
+  "positive_factors": [],
+  "factor_weights": {},
+  "portfolio_metrics": {
+    "final_multiple": 0.6667524702520051,
+    "annual_return": -0.08837124771305571,
+    "max_drawdown": 0.5215484088685334,
+    "sharpe": -0.40420267554510453,
+    "volatility": 0.185961884134672,
+    "days": 1104,
+    "win_rate": 0.46879334257975036,
+    "avg_trade_return": -0.0027779457075506366
+  },
+  "trade_count": 721
+}
