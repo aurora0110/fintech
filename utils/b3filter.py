@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from utils import b1filter, b2filter
+from utils.market_risk_tags import format_risk_note
 
 
 EPS = 1e-12
@@ -14,8 +15,6 @@ EPS = 1e-12
 B3_RET1_MAX = 0.02
 B3_AMPLITUDE_MAX = 0.05
 B3_VOL_SHRINK_MAX = 1.0
-B3_BASE_B2_RET1_MIN = 0.04
-B3_BASE_B2_UPPER_SHADOW_BODY_RATIO = 1.0 / 3.0
 B3_PREV_B1_J_MAX = 13.0
 
 
@@ -67,21 +66,7 @@ def add_features(df: pd.DataFrame, precomputed_b2: Optional[pd.DataFrame] = None
     x["vol_vs_prev"] = pd.Series(safe_div(x["volume"], x["volume"].shift(1)), index=x.index)
     x["vol_shrink"] = x["vol_vs_prev"] < B3_VOL_SHRINK_MAX
 
-    real_body = (x["close"] - x["open"]).abs()
-    upper_shadow = x["high"] - np.maximum(x["open"], x["close"])
-    x["b2_upper_shadow_small"] = (real_body > EPS) & (
-        upper_shadow <= real_body * B3_BASE_B2_UPPER_SHADOW_BODY_RATIO + EPS
-    )
-
-    x["base_b2_prev_b1"] = (
-        x["trend_ok"]
-        & x["bull_close"]
-        & (x["ret1"] >= B3_BASE_B2_RET1_MIN)
-        & x["daily_b1_signal"].shift(1).fillna(False)
-        & (x["volume"] > x["volume"].shift(1))
-        & x["b2_upper_shadow_small"]
-    )
-    x["prev_b2_any"] = x["base_b2_prev_b1"].shift(1).fillna(False)
+    x["prev_b2_any"] = x["b2_signal"].shift(1).fillna(False)
 
     x["b3_signal"] = (
         x["prev_b2_any"]
@@ -134,7 +119,10 @@ def check(file_path, hold_list=None, feature_cache=None):
 
     prev_types = describe_prev_types(latest)
     daily_reason = "B3承接(" + "+".join(prev_types) + ")" if prev_types else "B3承接"
+    risk_note = format_risk_note(feature_cache.risk_snapshot()) if feature_cache is not None else ""
     reason = f"周线：{weekly_reason} | 日线：{daily_reason}"
+    if risk_note:
+        reason = f"{reason} | {risk_note}"
     return [
         1,
         round(float(latest["low"]), 3),

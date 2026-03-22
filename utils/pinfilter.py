@@ -1,4 +1,5 @@
 from utils import b1filter, brick_filter, stoploss, technical_indicators
+from utils.market_risk_tags import format_risk_note
 import numpy as np
 import pandas as pd
 
@@ -357,9 +358,13 @@ def check(file_path, feature_cache=None):
         return [-1]
 
     daily_reason = "+".join(matched_subtypes)
+    risk_note = format_risk_note(feature_cache.risk_snapshot()) if feature_cache is not None else ""
+    note = f"周线：{weekly_reason} | 日线：{daily_reason}"
+    if risk_note:
+        note = f"{note} | {risk_note}"
     return [
         1,
         daily_reason,
         build_recommendation_order(matched_subtypes),
-        f"周线：{weekly_reason} | 日线：{daily_reason}",
+        note,
     ]

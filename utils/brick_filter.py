@@ -6,6 +6,7 @@ from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
+from utils.market_risk_tags import add_risk_features, format_risk_note, latest_risk_snapshot
 
 
 INPUT_DIR = Path("/Users/lidongyang/Desktop/Qstrategy/data/20260226/normal")
@@ -273,7 +274,7 @@ def build_signal_df(input_dir: Path, mode: str = MODE) -> pd.DataFrame:
             & (x["trend_line"] > x["long_line"])
         )
         perfect_mask = (
-            (legacy_mask | x["strong_trend_setup"])
+            legacy_mask
             & x["trend_line"].gt(x["long_line"])
             & x["ret1"].between(-0.03, 0.11, inclusive="both")
         )
@@ -381,11 +382,14 @@ def apply_selection(signal_df: pd.DataFrame, mode: str = MODE) -> pd.DataFrame:
     return x.groupby("date", group_keys=False).head(TOP_N).reset_index(drop=True)
 
 
-def check(file_path, hold_list=None, mode: str = MODE):
-    df = load_one_csv(str(file_path))
+def check(file_path, hold_list=None, mode: str = MODE, feature_cache=None):
+    if feature_cache is not None:
+        df = feature_cache.raw_df()
+    else:
+        df = load_one_csv(str(file_path))
     if df is None or df.empty:
         return [-1]
-    x = add_features(df)
+    x = feature_cache.brick_features() if feature_cache is not None else add_features(df)
     latest_idx = len(x) - 1
     if latest_idx < 0:
         return [-1]
@@ -399,10 +403,7 @@ def check(file_path, hold_list=None, mode: str = MODE):
         and float(latest["trend_line"]) > float(latest["long_line"])
     )
     perfect_ok = (
-        (
-            legacy_ok
-            or bool(latest["strong_trend_setup"])
-        )
+        legacy_ok
         and float(latest["trend_line"]) > float(latest["long_line"])
         and (-0.03 <= float(latest["ret1"]) <= 0.11)
     )
@@ -434,7 +435,15 @@ def check(file_path, hold_list=None, mode: str = MODE):
             + 0.05 * brick_quality
         )
     stop_loss_price = round(float(latest["low"]) * 0.99, 3)
-    return [1, stop_loss_price, float(latest["close"]), round(sort_score, 4), "brick动量续冲"]
+    if feature_cache is not None:
+        risk_note = format_risk_note(feature_cache.risk_snapshot())
+    else:
+        risk_df = add_risk_features(df)
+        risk_note = format_risk_note(latest_risk_snapshot(risk_df))
+    note = "brick动量续冲"
+    if risk_note:
+        note = f"{note} | {risk_note}"
+    return [1, stop_loss_price, float(latest["close"]), round(sort_score, 4), note]
 
 
 def main() -> None:
@@ -445,6 +454,119 @@ def main() -> None:
     latest_trade_date = pd.to_datetime(selected_df["date"]).max()
     latest_df = selected_df[pd.to_datetime(selected_df["date"]) == latest_trade_date].copy()
     print(latest_df[["date", "code", "daily_rank", "sort_score", "rebound_ratio", "signal_vs_ma5", "pullback_shrink_ratio"]].to_string(index=False))
+
+
+def last_double_bull_anchor(df: pd.DataFrame, lookback: int = 60) -> pd.DataFrame:
+    high_anchor = np.full(len(df), np.nan, dtype=float)
+    low_anchor = np.full(len(df), np.nan, dtype=float)
+    close_anchor = np.full(len(df), np.nan, dtype=float)
+    has_anchor = np.zeros(len(df), dtype=bool)
+    is_candidate = np.zeros(len(df), dtype=bool)
+
+    last_high = np.nan
+    last_low = np.nan
+    last_close = np.nan
+    last_idx = -10_000
+
+    bull = df["close"] > df["open"]
+    prev_vol = df["volume"].shift(1)
+    vol_ratio_prev = safe_div(df["volume"], prev_vol)
+    vol_rank30 = (
+        df["volume"]
+        .rolling(30, min_periods=1)
+        .apply(lambda s: pd.Series(s).rank(method="min", ascending=False).iloc[-1], raw=False)
+    )
+    vol_rank60 = (
+        df["volume"]
+        .rolling(60, min_periods=1)
+        .apply(lambda s: pd.Series(s).rank(method="min", ascending=False).iloc[-1], raw=False)
+    )
+    cross_up = (df["trend_line"] > df["long_line"]) & (df["trend_line"].shift(1) <= df["long_line"].shift(1))
+    future_cross_15 = np.zeros(len(df), dtype=bool)
+    cross_values = cross_up.fillna(False).to_numpy(dtype=bool)
+    for i in range(len(df)):
+        future_cross_15[i] = cross_values[i : min(i + 16, len(df))].any()
+
+    bottom_zone_now = (
+        (df["trend_line"] <= df["long_line"] * 1.03)
+        & (safe_div(df["long_line"] - df["trend_line"], df["close"]) < 0.08)
+    )
+    double_bull = (
+        bull
+        & (vol_ratio_prev >= 2.0)
+        & ((vol_rank30 <= 2.0) | (vol_rank60 <= 2.0))
+        & bottom_zone_now.fillna(False)
+        & pd.Series(future_cross_15, index=df.index)
+    )
+
+    for i in range(len(df)):
+        if i - last_idx > lookback:
+            last_high = np.nan
+            last_low = np.nan
+            last_close = np.nan
+            last_idx = -10_000
+        high_anchor[i] = last_high
+        low_anchor[i] = last_low
+        close_anchor[i] = last_close
+        has_anchor[i] = np.isfinite(last_close)
+        if bool(double_bull.iloc[i]):
+            is_candidate[i] = True
+            last_high = float(df.at[i, "high"])
+            last_low = float(df.at[i, "low"])
+            last_close = float(df.at[i, "close"])
+            last_idx = i
+
+    return pd.DataFrame(
+        {
+            "has_double_bull_anchor": has_anchor,
+            "double_bull_high": high_anchor,
+            "double_bull_low": low_anchor,
+            "double_bull_close": close_anchor,
+            "double_bull_candidate": is_candidate,
+            "double_bull_vol_ratio_prev": vol_ratio_prev,
+            "double_bull_vol_rank30": vol_rank30,
+            "double_bull_vol_rank60": vol_rank60,
+            "double_bull_bottom_zone": bottom_zone_now,
+        },
+        index=df.index,
+    )
+
+
+def derive_keyk_states(df: pd.DataFrame) -> pd.DataFrame:
+    prev_volume = df["volume"].shift(1).fillna(0.0)
+    has_anchor = df["has_double_bull_anchor"].fillna(False)
+
+    close_key = df["double_bull_close"]
+    high_key = df["double_bull_high"]
+
+    support_touch_close = has_anchor & (df["low"] <= close_key * 1.01) & (df["close"] >= close_key)
+    support_touch_high = has_anchor & (df["low"] <= high_key * 1.01) & (df["close"] >= high_key)
+    pressure_touch_close = has_anchor & (df["high"] >= close_key * 0.995) & (df["close"] <= close_key)
+    pressure_touch_high = has_anchor & (df["high"] >= high_key * 0.995) & (df["close"] <= high_key)
+
+    support_invalid_close = has_anchor & (df["close"] < close_key * 0.99) & (df["volume"] > prev_volume)
+    support_invalid_high = has_anchor & (df["close"] < high_key * 0.99) & (df["volume"] > prev_volume)
+    pressure_invalid_close = has_anchor & (df["close"] > close_key * 1.01) & (df["volume"] > prev_volume)
+    pressure_invalid_high = has_anchor & (df["close"] > high_key * 1.01) & (df["volume"] > prev_volume)
+
+    support_active = (support_touch_close | support_touch_high) & ~(support_invalid_close | support_invalid_high)
+    pressure_active = (pressure_touch_close | pressure_touch_high) & ~(pressure_invalid_close | pressure_invalid_high)
+
+    return pd.DataFrame(
+        {
+            "keyk_support_touch_close": support_touch_close,
+            "keyk_support_touch_high": support_touch_high,
+            "keyk_pressure_touch_close": pressure_touch_close,
+            "keyk_pressure_touch_high": pressure_touch_high,
+            "keyk_support_invalid_close": support_invalid_close,
+            "keyk_support_invalid_high": support_invalid_high,
+            "keyk_pressure_invalid_close": pressure_invalid_close,
+            "keyk_pressure_invalid_high": pressure_invalid_high,
+            "keyk_support_active": support_active,
+            "keyk_pressure_active": pressure_active,
+        },
+        index=df.index,
+    )
 
 
 if __name__ == "__main__":

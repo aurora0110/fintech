@@ -6,6 +6,7 @@ from typing import Optional
 import pandas as pd
 
 from utils import b1filter, b2filter, b3filter, brick_filter, pinfilter, technical_indicators
+from utils.market_risk_tags import add_risk_features, latest_risk_snapshot
 from utils.shared_market_features import compute_base_features
 
 
@@ -22,6 +23,8 @@ class StrategyFeatureCache:
     _b3_features: Optional[pd.DataFrame] = None
     _brick_features: Optional[pd.DataFrame] = None
     _pin_today_features: Optional[dict] = None
+    _risk_features: Optional[pd.DataFrame] = None
+    _risk_snapshot: Optional[dict] = None
 
     def raw_df(self) -> Optional[pd.DataFrame]:
         if self._raw_df is None:
@@ -99,7 +102,6 @@ class StrategyFeatureCache:
             self._b2_features = b2filter.add_features(
                 raw.copy(),
                 precomputed_base=self.base_features(),
-                include_optional_types=False,
             )
         return self._b2_features
 
@@ -119,7 +121,7 @@ class StrategyFeatureCache:
             raw = self.raw_df()
             if raw is None or raw.empty:
                 return None
-            self._brick_features = brick_filter.add_features(raw.copy(), precomputed_base=self.base_features())
+            self._brick_features = brick_filter.add_features(raw.copy())
         return self._brick_features
 
     def pin_today_features(self) -> Optional[dict]:
@@ -129,3 +131,17 @@ class StrategyFeatureCache:
                 return None
             self._pin_today_features = pinfilter.build_today_features_from_feature_df(brick_df.copy())
         return self._pin_today_features
+
+    def risk_features(self) -> Optional[pd.DataFrame]:
+        if self._risk_features is None:
+            raw = self.raw_df()
+            if raw is None or raw.empty:
+                return None
+            self._risk_features = add_risk_features(raw.copy(), precomputed_base=self.base_features())
+        return self._risk_features
+
+    def risk_snapshot(self) -> dict:
+        if self._risk_snapshot is None:
+            risk_df = self.risk_features()
+            self._risk_snapshot = latest_risk_snapshot(risk_df) if risk_df is not None else {}
+        return self._risk_snapshot
