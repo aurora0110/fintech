@@ -1,0 +1,45 @@
+{
+  "name": "b3_reference_pipeline_smoke",
+  "data": {
+    "data_dir": "/tmp/qstrategy_pipeline_smoke",
+    "exclude_ranges": [["2015-06-01", "2024-09-30"]],
+    "min_history_bars": 30
+  },
+  "strategy": {
+    "strategy_family": "b3",
+    "candidate_pool": "b3.follow_through",
+    "confirmer": "b3.follow_through_quality",
+    "confirmer_mode": "score",
+    "confirmer_weight": 1.0,
+    "params": {
+      "base_b2_required": true,
+      "weekly_filter": true
+    }
+  },
+  "ranker": {
+    "name": "ranker.fusion",
+    "mode": "score",
+    "top_n": 3,
+    "params": {
+      "components": ["similarity", "factor_discovery", "xgboost"]
+    }
+  },
+  "exit": {
+    "name": "exit.model_plus_tp",
+    "params": {
+      "take_profit_pct": 0.2
+    }
+  },
+  "account": {
+    "initial_capital": 1000000.0,
+    "max_positions": 10,
+    "position_sizing": "equal",
+    "max_holding_days": 60,
+    "allow_same_day_overlap": false,
+    "cooldown_days": 0,
+    "pause_after_stop_loss_count": 3,
+    "pause_days": 5,
+    "default_stop_loss_pct": 0.1,
+    "halve_stop_loss_below_long_line": true
+  }
+}

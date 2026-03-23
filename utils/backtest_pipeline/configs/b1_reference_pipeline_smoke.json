@@ -1,0 +1,45 @@
+{
+  "name": "b1_reference_pipeline_smoke",
+  "data": {
+    "data_dir": "/tmp/qstrategy_pipeline_smoke",
+    "exclude_ranges": [["2015-06-01", "2024-09-30"]],
+    "min_history_bars": 30
+  },
+  "strategy": {
+    "strategy_family": "b1",
+    "candidate_pool": "b1.low_cross",
+    "confirmer": "b1.semantic_bonus",
+    "confirmer_mode": "score",
+    "confirmer_weight": 1.0,
+    "params": {
+      "primary_buy_types": ["回踩趋势线", "回踩多空线"],
+      "addons": ["关键K", "缩半量", "倍量柱"]
+    }
+  },
+  "ranker": {
+    "name": "ranker.fusion",
+    "mode": "score",
+    "top_n": 5,
+    "params": {
+      "components": ["similarity", "factor_discovery", "xgboost"]
+    }
+  },
+  "exit": {
+    "name": "exit.model_plus_tp",
+    "params": {
+      "take_profit_pct": 0.3
+    }
+  },
+  "account": {
+    "initial_capital": 1000000.0,
+    "max_positions": 10,
+    "position_sizing": "equal",
+    "max_holding_days": 60,
+    "allow_same_day_overlap": false,
+    "cooldown_days": 0,
+    "pause_after_stop_loss_count": 3,
+    "pause_days": 5,
+    "default_stop_loss_pct": 0.1,
+    "halve_stop_loss_below_long_line": true
+  }
+}
