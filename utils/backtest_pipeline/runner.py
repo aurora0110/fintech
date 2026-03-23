@@ -11,6 +11,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from utils.backtest_pipeline.catalog import register_builtin_modules
+from utils.backtest_pipeline.account_runner import run_pipeline_backtest
 from utils.backtest_pipeline.candidate_pools.base import CandidatePoolContext
 from utils.backtest_pipeline.confirmers.base import ConfirmerContext
 from utils.backtest_pipeline.inputs.main_style_loader import load_market_data
@@ -150,12 +151,14 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="模块化 backtest pipeline 入口骨架")
     parser.add_argument("config", help="pipeline json 配置文件路径")
-    parser.add_argument("--mode", choices=["describe", "materialize"], default="describe")
+    parser.add_argument("--mode", choices=["describe", "materialize", "backtest"], default="describe")
     args = parser.parse_args()
 
     config = load_pipeline_config(args.config)
     if args.mode == "materialize":
         summary = materialize_pipeline_candidates(config)
+    elif args.mode == "backtest":
+        summary = run_pipeline_backtest(config)
     else:
         summary = describe_pipeline(config)
     print(json.dumps(summary, ensure_ascii=False, indent=2, default=str))

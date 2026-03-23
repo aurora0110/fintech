@@ -10,15 +10,30 @@
 
 - [runner.py](/Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/runner.py)
 
-现在它先做两件事：
+现在它支持三种模式：
+1. `describe`
+2. `materialize`
+3. `backtest`
+
+其中：
+ - `describe`：读取配置并描述组合结构
+ - `materialize`：真实生成候选池、确认因子、排序后 `topN`
+ - `backtest`：把 `materialize` 结果送进统一账户层引擎，输出交易、净值和汇总
+
+以前它先做两件事：
 1. 读取配置
 2. 校验并描述这条 pipeline 的模块组合
 
-后续会继续补：
+现在已经补到：
 - 真正的候选池生成
 - 排序器执行
-- 账户层回测
-- 结果快照与覆盖报告
+- 统一账户层回测（最小可运行版）
+- 结果快照
+
+仍待继续补：
+- 更完整的卖出模块执行器
+- 更完整的仓位/冷却/暂停规则
+- 更完整的模型卖点训练与回放
 
 ## 运行方式
 
@@ -27,6 +42,22 @@
 ```bash
 python3 /Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/runner.py \
   /Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/configs/b1_reference_pipeline_smoke.json
+```
+
+生成候选预览：
+
+```bash
+python3 /Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/runner.py \
+  /Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/configs/b1_reference_pipeline_smoke.json \
+  --mode materialize
+```
+
+直接跑统一账户层：
+
+```bash
+python3 /Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/runner.py \
+  /Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/configs/brick_formal_best_pipeline_smoke.json \
+  --mode backtest
 ```
 
 ## 配置结构
@@ -81,6 +112,7 @@ python3 /Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/runner.py \
 
 ### BRICK
 - `brick.main`
+- `brick.formal_best`
 
 ## 当前内置确认因子
 
@@ -115,6 +147,7 @@ python3 /Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/runner.py \
 - `exit.model_only`
 - `exit.model_plus_tp`
 - `exit.partial_tp`
+- `exit.brick_half_tp_then_green`
 
 ## 当前原则
 
@@ -122,6 +155,18 @@ python3 /Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/runner.py \
 2. 同一策略内部允许多个候选池变体。
 3. `关键K / 缩半量 / 倍量柱` 这类默认放确认因子，不直接变成独立主买点。
 4. 新方法一律作为模块追加，不覆盖旧方法。
+
+## 当前完成度说明
+
+- `B1`
+  - 候选池迁移较深，复用已验证实验产物
+  - 统一账户层已能跑通，但 smoke 场景可能因为样本宇宙不一致出现 `0` 候选
+- `BRICK`
+  - `brick.formal_best` 已迁入
+  - 统一账户层 smoke 已能跑出真实交易和净值
+- `B2 / B3 / 单针`
+  - 已接入候选池模块
+  - 其中部分仍是桥接旧 `check()` 或占位池，后续需要继续做深迁移
 
 ## 实验矩阵与覆盖报告
 

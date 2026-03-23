@@ -176,6 +176,76 @@
       "status": "completed",
       "conclusion": "单针更适合过滤近20日高位巨量阴线，B3 适合轻量过滤顶部出货区，BRICK 优先过滤近20日假突破或核心出货组合。",
       "reference_doc": "/Users/lidongyang/Desktop/Qstrategy/Qstrategy实验纪要补充_20260320.md"
+    },
+    {
+      "id": "brick-formal-best-half-tp-green-compare",
+      "family": "brick",
+      "title": "BRICK 正式冠军卖法对比：3%止盈 vs 3.5%半仓止盈后等转绿",
+      "status": "completed",
+      "combo": {
+        "family": "brick",
+        "candidate_pool": "brick.formal_best",
+        "ranker": "ranker.factor_discovery",
+        "ranker_params": {
+          "score_col": "base_score"
+        },
+        "top_n": 10,
+        "exits": [
+          {
+            "name": "exit.fixed_tp",
+            "params": {
+              "take_profit_pct": 0.03,
+              "stop_mode": "entry_low_x_0.99",
+              "max_holding_days": 3
+            }
+          },
+          {
+            "name": "exit.brick_half_tp_then_green",
+            "params": {
+              "first_take_profit_pct": 0.035,
+              "stop_mode": "entry_low_x_0.99"
+            }
+          }
+        ]
+      },
+      "conclusion": "BRICK 正式冠军买点迁入 pipeline 后，对比结果显示 3.5%半仓止盈后等砖块转绿的卖法没有超过原 3%止盈策略；新卖法胜率更低、持有更久、组合净值更差。",
+      "result_dir": "/Users/lidongyang/Desktop/Qstrategy/results/brick_pipeline_half_tp_green_compare_v1_full_20260323"
+    },
+    {
+      "id": "brick-formal-best-half-tp-green-profit-only-compare",
+      "family": "brick",
+      "title": "BRICK 正式冠军卖法对比：仅盈利仓启用 3.5% 半仓止盈后等转绿",
+      "status": "completed",
+      "combo": {
+        "family": "brick",
+        "candidate_pool": "brick.formal_best",
+        "ranker": "ranker.factor_discovery",
+        "ranker_params": {
+          "score_col": "base_score"
+        },
+        "top_n": 10,
+        "exits": [
+          {
+            "name": "exit.fixed_tp",
+            "params": {
+              "take_profit_pct": 0.03,
+              "stop_mode": "entry_low_x_0.99",
+              "max_holding_days": 3
+            }
+          },
+          {
+            "name": "exit.brick_half_tp_then_green",
+            "params": {
+              "first_take_profit_pct": 0.035,
+              "apply_green_only_after_partial_profit": true,
+              "fallback_to_baseline_if_no_partial": true,
+              "stop_mode": "entry_low_x_0.99"
+            }
+          }
+        ]
+      },
+      "conclusion": "仅对盈利仓启用 3.5% 半仓止盈后等转绿，明显优于“所有仓位都让剩余半仓等转绿”的版本，但仍未超过原 3%止盈+0.99止损+3天到期的 BRICK 正式冠军。",
+      "result_dir": "/Users/lidongyang/Desktop/Qstrategy/results/brick_pipeline_half_tp_green_compare_v2_full_20260323"
     }
   ]
 }

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
 import sys
@@ -16,8 +17,7 @@ from utils.backtest import backtest_b1_strategy as b1bt  # type: ignore
 
 
 DATA_DIR = "/Users/lidongyang/Desktop/Qstrategy/data/forward_data"
-RESULT_DIR = ROOT / "results/b1_line_slope_compare_20260315"
-RESULT_DIR.mkdir(parents=True, exist_ok=True)
+DEFAULT_RESULT_DIR = ROOT / "results/b1_line_slope_compare_20260315"
 
 EXCLUDE_START = pd.Timestamp("2015-06-01")
 EXCLUDE_END = pd.Timestamp("2024-09-30")
@@ -46,6 +46,17 @@ LINE_DEFS = {
     "MA30": "30日均线",
     "MA60": "60日均线",
 }
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Compare B1 line slope variants.")
+    parser.add_argument(
+        "--result-dir",
+        type=Path,
+        default=DEFAULT_RESULT_DIR,
+        help="Directory for this run's outputs.",
+    )
+    return parser.parse_args()
 
 
 def rolling_last_percentile(series: pd.Series, window: int) -> pd.Series:
@@ -443,14 +454,17 @@ def run_account_backtest(
     return result_row, trade_rows, equity_rows
 
 
-def main():
+def main(result_dir: Path | None = None):
+    result_dir = (result_dir or DEFAULT_RESULT_DIR).resolve()
+    result_dir.mkdir(parents=True, exist_ok=True)
+
     stock_data_raw, all_dates_full = b1bt.load_all_data(DATA_DIR)
     stock_data = {code: df for code, df in stock_data_raw.items()}
     all_dates = [d for d in all_dates_full if not (EXCLUDE_START <= d <= EXCLUDE_END)]
     variants = build_variants()
 
     pending_by_variant, signal_df = build_signal_sets(stock_data, all_dates_full, variants)
-    signal_df.to_csv(RESULT_DIR / "signals.csv", index=False, encoding="utf-8-sig")
+    signal_df.to_csv(result_dir / "signals.csv", index=False, encoding="utf-8-sig")
 
     signal_summary_rows = []
     for variant in variants:
@@ -468,7 +482,7 @@ def main():
             }
         )
     signal_summary_df = pd.DataFrame(signal_summary_rows).sort_values(["signal_count", "variant_id"], ascending=[False, True])
-    signal_summary_df.to_csv(RESULT_DIR / "signal_summary.csv", index=False, encoding="utf-8-sig")
+    signal_summary_df.to_csv(result_dir / "signal_summary.csv", index=False, encoding="utf-8-sig")
 
     result_rows = []
     all_trade_rows = []
@@ -490,19 +504,19 @@ def main():
             all_equity_rows.extend(equity_rows)
 
             pd.DataFrame(result_rows).to_csv(
-                RESULT_DIR / "account_results_partial.csv",
+                result_dir / "account_results_partial.csv",
                 index=False,
                 encoding="utf-8-sig",
             )
             pd.DataFrame(all_equity_rows).to_csv(
-                RESULT_DIR / "equity_curve_partial.csv",
+                result_dir / "equity_curve_partial.csv",
                 index=False,
                 encoding="utf-8-sig",
             )
             partial_summary["completed_combos"] += 1
             partial_summary["last_variant_id"] = variant["variant_id"]
             partial_summary["last_take_profit_pct"] = tp
-            (RESULT_DIR / "progress.json").write_text(
+            (result_dir / "progress.json").write_text(
                 json.dumps(partial_summary, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
@@ -511,9 +525,9 @@ def main():
         ["trade_win_rate_pct", "avg_trade_return_pct", "cagr_pct"],
         ascending=[False, False, False],
     )
-    results_df.to_csv(RESULT_DIR / "account_results.csv", index=False, encoding="utf-8-sig")
-    pd.DataFrame(all_trade_rows).to_csv(RESULT_DIR / "trade_log.csv", index=False, encoding="utf-8-sig")
-    pd.DataFrame(all_equity_rows).to_csv(RESULT_DIR / "equity_curve.csv", index=False, encoding="utf-8-sig")
+    results_df.to_csv(result_dir / "account_results.csv", index=False, encoding="utf-8-sig")
+    pd.DataFrame(all_trade_rows).to_csv(result_dir / "trade_log.csv", index=False, encoding="utf-8-sig")
+    pd.DataFrame(all_equity_rows).to_csv(result_dir / "equity_curve.csv", index=False, encoding="utf-8-sig")
 
     best_trade_win = results_df.sort_values(
         ["trade_win_rate_pct", "avg_trade_return_pct", "cagr_pct"],
@@ -555,9 +569,10 @@ def main():
         "best_trade_return": best_trade_return,
         "best_account": best_account,
     }
-    (RESULT_DIR / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    (result_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+    main(result_dir=args.result_dir)

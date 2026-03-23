@@ -3,7 +3,7 @@ from __future__ import annotations
 from utils.backtest_pipeline.candidate_pools.b1 import B1LowCrossPool, B1TxtConfirmedPool
 from utils.backtest_pipeline.candidate_pools.b2 import B2MainPool, B2Type1Pool, B2Type4Pool
 from utils.backtest_pipeline.candidate_pools.b3 import B3FollowThroughPool, B3WeeklyAlignedPool
-from utils.backtest_pipeline.candidate_pools.brick import BrickMainPool
+from utils.backtest_pipeline.candidate_pools.brick import BrickFormalBestPool, BrickMainPool
 from utils.backtest_pipeline.candidate_pools.pin import PinStructureSupportPool, PinTrendWashPool
 from utils.backtest_pipeline.confirmers.b1 import B1SemanticBonusConfirmer
 from utils.backtest_pipeline.confirmers.b2 import B2StartupQualityConfirmer
@@ -11,6 +11,7 @@ from utils.backtest_pipeline.confirmers.b3 import B3FollowThroughConfirmer
 from utils.backtest_pipeline.confirmers.brick import BrickTurnQualityConfirmer
 from utils.backtest_pipeline.confirmers.pin import PinNeedleQualityConfirmer
 from utils.backtest_pipeline.exits.generic import (
+    BrickHalfTakeProfitThenGreenExit,
     FixedTakeProfitExit,
     ModelOnlyExit,
     ModelPlusTakeProfitExit,
@@ -48,6 +49,7 @@ def register_builtin_modules() -> None:
     CANDIDATE_POOL_REGISTRY.register("pin.trend_wash", "pin", PinTrendWashPool, "单针趋势洗盘候选池")
     CANDIDATE_POOL_REGISTRY.register("pin.structure_support", "pin", PinStructureSupportPool, "单针结构支撑候选池")
     CANDIDATE_POOL_REGISTRY.register("brick.main", "brick", BrickMainPool, "砖型主候选池")
+    CANDIDATE_POOL_REGISTRY.register("brick.formal_best", "brick", BrickFormalBestPool, "BRICK 历史最优正式候选池")
 
     CONFIRMER_REGISTRY.register("b1.semantic_bonus", "b1", B1SemanticBonusConfirmer, "B1 关键K/缩半量/倍量柱加分")
     CONFIRMER_REGISTRY.register("b2.startup_quality", "b2", B2StartupQualityConfirmer, "B2 启动质量确认")
@@ -67,6 +69,7 @@ def register_builtin_modules() -> None:
     EXIT_REGISTRY.register("exit.model_only", "generic", ModelOnlyExit, "模型卖出")
     EXIT_REGISTRY.register("exit.model_plus_tp", "generic", ModelPlusTakeProfitExit, "模型+固定止盈")
     EXIT_REGISTRY.register("exit.partial_tp", "generic", PartialTakeProfitExit, "分批固定止盈")
+    EXIT_REGISTRY.register("exit.brick_half_tp_then_green", "brick", BrickHalfTakeProfitThenGreenExit, "BRICK 3.5%半仓止盈+转绿卖剩余")
 
     ACCOUNT_POLICY_REGISTRY.register(
         "portfolio.equal_weight",

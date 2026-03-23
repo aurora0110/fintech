@@ -1,4 +1,0 @@
-interface:
-  display_name: "A股量化规则"
-  short_description: "覆盖A股交易制度、风控约束、回测实现与执行细则的技能"
-  default_prompt: "根据A股主板/创业板交易制度约束，设计可回测、可执行的选股与交易策略。"

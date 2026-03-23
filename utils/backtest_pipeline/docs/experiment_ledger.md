@@ -142,6 +142,24 @@
 - 参考文档：
   - [\/Users\/lidongyang\/Desktop\/Qstrategy\/Qstrategy实验纪要补充_20260320.md](/Users/lidongyang/Desktop/Qstrategy/Qstrategy实验纪要补充_20260320.md)
 
+### 18. BRICK 正式冠军卖法对比：3%止盈 vs 3.5%半仓止盈后等转绿
+- 主对象：`BRICK`
+- 核心方法：把历史正式冠军买点迁入 `backtest_pipeline` 的 `brick.formal_best`，比较：
+  - 原策略：`3%止盈 + entry_low*0.99止损 + 3天到期`
+  - 新策略：`3.5%次日开盘止盈半仓 + 剩余半仓等砖块转绿次日开盘卖出 + 保留0.99止损`
+- 结论：新半仓卖法没有超过原 BRICK 正式冠军；虽然单笔均值略高，但胜率明显下降、持有期变长，最终组合净值明显更低
+- 结果目录：
+  - [\/Users\/lidongyang\/Desktop\/Qstrategy\/results\/brick_pipeline_half_tp_green_compare_v1_full_20260323](/Users/lidongyang/Desktop/Qstrategy/results/brick_pipeline_half_tp_green_compare_v1_full_20260323)
+
+### 19. BRICK 正式冠军卖法对比：仅盈利仓启用 3.5% 半仓止盈后等转绿
+- 主对象：`BRICK`
+- 核心方法：保持 `brick.formal_best` 买点、排序、前50%过滤、`top10` 全不变，只调整卖法：
+  - 原策略：`3%止盈 + entry_low*0.99止损 + 3天到期`
+  - 新策略：若先达到 `3.5%`，次日开盘卖半仓；剩余半仓仅在盈利仓路径里等砖块转绿次日开盘卖出；若始终未进入半仓止盈，则整笔交易继续按原策略处理
+- 结论：该“仅盈利仓启用转绿”的版本明显优于上一轮“全仓都等转绿剩余半仓”，但仍未超过原 BRICK 正式冠军；最终净值仍低于原策略，且持有天数更长、胜率略低
+- 结果目录：
+  - [\/Users\/lidongyang\/Desktop\/Qstrategy\/results\/brick_pipeline_half_tp_green_compare_v2_full_20260323](/Users/lidongyang/Desktop/Qstrategy/results/brick_pipeline_half_tp_green_compare_v2_full_20260323)
+
 ## 仍待继续结构化
 
 以下实验虽然已经登记，但还没有全部还原成可直接映射到 `backtest_pipeline` 的精确 `combo`：

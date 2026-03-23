@@ -113,9 +113,15 @@ FAMILY_MATRIX_SPECS: dict[str, dict[str, Any]] = {
             "brick.main": {
                 "confirmers": [None, "brick.turn_quality"],
                 "rankers": [{"name": "ranker.factor_discovery", "top_n_values": [3, 5, 8], "params": {"score_col": "base_score"}}],
+            },
+            "brick.formal_best": {
+                "confirmers": [None],
+                "rankers": [{"name": "ranker.factor_discovery", "top_n_values": [10], "params": {"score_col": "base_score"}}],
             }
         },
-        "exits": _tp_variants([0.1, 0.2, 0.3]) + _model_plus_tp_variants(["xgb_score_v2"], [0.2, 0.3]),
+        "exits": _tp_variants([0.03, 0.1, 0.2, 0.3])
+        + _model_plus_tp_variants(["xgb_score_v2"], [0.2, 0.3])
+        + [{"name": "exit.brick_half_tp_then_green", "params": {"first_take_profit_pct": 0.035}}],
     },
 }
 

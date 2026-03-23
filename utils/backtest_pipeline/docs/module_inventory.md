@@ -50,6 +50,30 @@
   - 注册模块
   - 加载数据
   - 输出当前 pipeline 的结构摘要
+  - `materialize` 真实生成候选与 `topN`
+  - `backtest` 调用统一账户层执行器落交易/净值/summary
+
+### [account_runner.py](/Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/account_runner.py)
+- 统一账户层执行器（最小可运行版）
+- 负责：
+  - 复用 pipeline 配置生成 `selected_candidates`
+  - 调用 `core.engine.BacktestEngine`
+  - 输出：
+    - `selected_candidates.csv`
+    - `equity_curve.csv`
+    - `daily_returns.csv`
+    - `trades.csv`
+    - `summary.json`
+
+### [strategy_adapter.py](/Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/strategy_adapter.py)
+- 把 pipeline 候选结果桥接成 `core.engine` 可执行的 `SignalStrategy`
+- 当前支持：
+  - 通用止损
+  - 多空线下止损减半
+  - `fixed_tp`
+  - `model_only`
+  - `model_plus_tp`
+  - 最大持有天数
 
 ## inputs
 
@@ -70,19 +94,31 @@
 - `B1TxtConfirmedPool`
 
 ### [candidate_pools/b2.py](/Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/candidate_pools/b2.py)
+- `B2MainPool`
 - `B2Type1Pool`
 - `B2Type4Pool`
+- 当前状态：
+  - `b2.main`：基于 `b2filter.add_features()` 的主候选池
+  - `b2.type1`：贴近多空线 + `J` 进入 20 日 10% 低位
+  - `b2.type4`：趋势线上穿多空线后的第一次回踩趋势线
 
 ### [candidate_pools/b3.py](/Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/candidate_pools/b3.py)
 - `B3FollowThroughPool`
 - `B3WeeklyAlignedPool`
+- 当前状态：
+  - `b3.follow_through`：主承接池
+  - `b3.weekly_aligned`：在主承接基础上加入周线一致性背景加分
 
 ### [candidate_pools/pin.py](/Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/candidate_pools/pin.py)
 - `PinTrendWashPool`
 - `PinStructureSupportPool`
+- 当前状态：
+  - `pin.trend_wash`：A/B/C 综合单针池
+  - `pin.structure_support`：收敛到 `C型(结构支撑)` 的单针子池
 
 ### [candidate_pools/brick.py](/Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/candidate_pools/brick.py)
 - `BrickMainPool`
+- `BrickFormalBestPool`
 
 ## confirmers
 
@@ -94,12 +130,18 @@
 
 ### [confirmers/b2.py](/Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/confirmers/b2.py)
 - `B2StartupQualityConfirmer`
+- 当前状态：
+  - 已按 `收盘质量 / 量能质量 / 趋势领先 / J空间 / type1/type4 bonus` 加分
 
 ### [confirmers/b3.py](/Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/confirmers/b3.py)
 - `B3FollowThroughConfirmer`
+- 当前状态：
+  - 已按 `ret1 / 振幅 / 缩量 / prev_b2 / 周线背景` 加分
 
 ### [confirmers/pin.py](/Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/confirmers/pin.py)
 - `PinNeedleQualityConfirmer`
+- 当前状态：
+  - 已按 `A/B/C 子型 + along_trend_up / n_up_any / keyk_support_active` 加分
 
 ### [confirmers/brick.py](/Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/confirmers/brick.py)
 - `BrickTurnQualityConfirmer`
@@ -128,6 +170,7 @@
 - `ModelOnlyExit`
 - `ModelPlusTakeProfitExit`
 - `PartialTakeProfitExit`
+- `BrickHalfTakeProfitThenGreenExit`
 
 ## portfolio
 
@@ -151,6 +194,12 @@
 
 ### [configs/pin_reference_pipeline.json](/Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/configs/pin_reference_pipeline.json)
 - 单针参考配置
+
+### [configs/brick_formal_best_pipeline.json](/Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/configs/brick_formal_best_pipeline.json)
+- BRICK 历史正式最优策略配置
+
+### [configs/brick_formal_best_pipeline_smoke.json](/Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/configs/brick_formal_best_pipeline_smoke.json)
+- BRICK 历史正式最优策略小样本配置
 
 ## docs
 

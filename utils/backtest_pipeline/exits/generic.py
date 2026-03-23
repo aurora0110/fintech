@@ -19,3 +19,9 @@ class PartialTakeProfitExit(BaseExitModule):
     """预留给 10% 卖一半、20% 再卖一半这类分批卖。"""
 
     name = "exit.partial_tp"
+
+
+class BrickHalfTakeProfitThenGreenExit(BaseExitModule):
+    """BRICK 专用：达到阈值后次日卖半仓，剩余仓位等砖块转绿次日卖出。"""
+
+    name = "exit.brick_half_tp_then_green"
