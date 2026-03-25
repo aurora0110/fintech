@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import traceback
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +23,8 @@ if str(ROOT) not in sys.path:
 MAX_HOLD_DAYS = 3
 BUY_GAP_LIMIT = 0.04
 STOP_MULTIPLIERS = [0.985, 0.99, 0.995]
+TAKE_PROFIT_GRID = [0.02, 0.025, 0.03, 0.035]
+MAX_HOLD_GRID = [3, 5]
 
 
 @dataclass(frozen=True)
@@ -54,6 +57,17 @@ def update_progress(result_dir: Path, stage: str, **extra: Any) -> None:
     }
     payload.update(extra)
     (result_dir / "progress.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def write_error(result_dir: Path, exc: BaseException) -> None:
+    payload = {
+        "error_type": type(exc).__name__,
+        "message": str(exc),
+        "traceback": traceback.format_exc(),
+        "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    (result_dir / "error.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    update_progress(result_dir, "error", error_type=type(exc).__name__, message=str(exc))
 
 
 def classify_gap(signal_close: float, entry_open: float) -> str:
@@ -94,48 +108,30 @@ def build_methods(smoke: bool) -> list[ExitMethod]:
         ExitMethod("baseline_intraday_trigger", "1min", "baseline", {"mode": "intraday_trigger"}),
     ]
 
-    j_thresholds = [90] if smoke else [85, 90, 95]
-    min_profit_levels = [0.02] if smoke else [0.01, 0.02, 0.03]
-    for th in j_thresholds:
-        for mp in min_profit_levels:
-            methods.append(ExitMethod(f"m1_kdj_j{th}_p{mp:.2f}", "1min", "kdj_reversal", {"j_threshold": th, "min_profit": mp}))
-            methods.append(ExitMethod(f"m5_kdj_j{th}_p{mp:.2f}", "5min", "kdj_reversal", {"j_threshold": th, "min_profit": mp}))
+    if smoke:
+        methods.extend(
+            [
+                ExitMethod("m5_kdj_j90_reversal", "5min", "kdj_reversal", {"j_threshold": 90, "min_profit": 0.02}),
+                ExitMethod("m5_ema_crossdown", "5min", "ema_cross", {"min_profit": 0.02}),
+                ExitMethod("m5_vwap_break", "5min", "vwap_break", {"min_profit": 0.02}),
+                ExitMethod("m1_consecutive_down", "1min", "consecutive_down", {"down_n": 3, "min_profit": 0.02, "loss_floor": -0.01}),
+                ExitMethod("m1_trailing_stop", "1min", "trailing_stop", {"activate_profit": 0.03, "retrace": 0.012}),
+            ]
+        )
+        return methods
 
-    ema_min_profit_levels = [0.02] if smoke else [0.01, 0.02, 0.03]
-    for mp in ema_min_profit_levels:
-        methods.append(ExitMethod(f"m5_ema_cross_p{mp:.2f}", "5min", "ema_cross", {"min_profit": mp}))
-
-    down_ns = [3] if smoke else [3, 5]
-    down_profit_levels = [0.02] if smoke else [0.01, 0.02, 0.03]
-    loss_floors = [-0.01] if smoke else [-0.005, -0.01]
-    for n in down_ns:
-        for mp in down_profit_levels:
-            for lf in loss_floors:
-                methods.append(
-                    ExitMethod(
-                        f"m1_down{n}_p{mp:.2f}_l{abs(lf):.3f}",
-                        "1min",
-                        "consecutive_down",
-                        {"down_n": n, "min_profit": mp, "loss_floor": lf},
-                    )
-                )
-
-    activate_levels = [0.03] if smoke else [0.02, 0.03, 0.04]
-    retrace_levels = [0.012] if smoke else [0.008, 0.012, 0.016]
-    for act in activate_levels:
-        for retr in retrace_levels:
-            methods.append(
-                ExitMethod(
-                    f"m1_trailing_a{act:.2f}_r{retr:.3f}",
-                    "1min",
-                    "trailing_stop",
-                    {"activate_profit": act, "retrace": retr},
-                )
-            )
-
-    vwap_profit_levels = [0.02] if smoke else [0.01, 0.02, 0.03]
-    for mp in vwap_profit_levels:
-        methods.append(ExitMethod(f"m5_vwap_break_p{mp:.2f}", "5min", "vwap_break", {"min_profit": mp}))
+    methods.extend(
+        [
+            ExitMethod("m5_kdj_j90_reversal", "5min", "kdj_reversal", {"j_threshold": 90, "min_profit": 0.02}),
+            ExitMethod("m5_kdj_j85_reversal", "5min", "kdj_reversal", {"j_threshold": 85, "min_profit": 0.02}),
+            ExitMethod("m5_ema_crossdown", "5min", "ema_cross", {"min_profit": 0.02}),
+            ExitMethod("m5_vwap_break", "5min", "vwap_break", {"min_profit": 0.02}),
+            ExitMethod("m1_consecutive_down", "1min", "consecutive_down", {"down_n": 3, "min_profit": 0.02, "loss_floor": -0.01}),
+            ExitMethod("m1_trailing_stop", "1min", "trailing_stop", {"activate_profit": 0.03, "retrace": 0.012}),
+            ExitMethod("m5_trailing_stop", "5min", "trailing_stop", {"activate_profit": 0.03, "retrace": 0.012}),
+            ExitMethod("m5_j_below_80_after_peak", "5min", "j_below_after_peak", {"peak_threshold": 90, "exit_threshold": 80, "min_profit": 0.02}),
+        ]
+    )
     return methods
 
 
@@ -191,6 +187,8 @@ def build_bar_features(raw_minute: pd.DataFrame, family: str) -> pd.DataFrame:
     if family == "vwap_break":
         df = calc_ema(df)
         return calc_vwap(df)
+    if family == "j_below_after_peak":
+        return calc_kdj(df)
     if family in {"consecutive_down", "trailing_stop"}:
         return df
     return df
@@ -316,6 +314,16 @@ def simulate_feature_method(
             curr_fast = float(minute_df.iloc[i]["ema_fast"])
             if current_ret >= float(method.params["min_profit"]) and curr_close < curr_vwap and curr_close < curr_fast:
                 exit_reason = "vwap_break_close"
+                exit_date = pd.Timestamp(row.date)
+                exit_price = curr_close
+                break
+
+        elif method.family == "j_below_after_peak":
+            if i == 0:
+                continue
+            j_series = minute_df["J"].astype(float).iloc[: i + 1]
+            if float(j_series.max()) >= float(method.params["peak_threshold"]) and float(minute_df.iloc[i]["J"]) < float(method.params["exit_threshold"]) and current_ret >= float(method.params["min_profit"]):
+                exit_reason = "j_below_80_after_peak_close"
                 exit_date = pd.Timestamp(row.date)
                 exit_price = curr_close
                 break
@@ -464,7 +472,7 @@ def run(file_limit: int, output_dir: Path, smoke: bool) -> None:
     candidates.to_csv(output_dir / "selected_signals.csv", index=False, encoding="utf-8-sig")
     if candidates.empty:
         empty = pd.DataFrame()
-        for name in ["feature_trades.csv", "feature_skipped.csv", "feature_summary.csv", "gap_group_summary.csv"]:
+        for name in ["feature_exit_trades.csv", "feature_skipped.csv", "feature_exit_summary.csv", "feature_exit_gap_summary.csv", "best_exit_by_metric.csv"]:
             empty.to_csv(output_dir / name, index=False, encoding="utf-8-sig")
         (output_dir / "summary.json").write_text(json.dumps({"candidate_count": 0}, ensure_ascii=False, indent=2), encoding="utf-8")
         update_progress(output_dir, "finished", candidate_count=0)
@@ -487,15 +495,15 @@ def run(file_limit: int, output_dir: Path, smoke: bool) -> None:
     )
 
     trades, skipped = run_methods(candidates, daily_map, min1_map, min5_map, methods)
-    trades.to_csv(output_dir / "feature_trades.csv", index=False, encoding="utf-8-sig")
+    trades.to_csv(output_dir / "feature_exit_trades.csv", index=False, encoding="utf-8-sig")
     skipped.to_csv(output_dir / "feature_skipped.csv", index=False, encoding="utf-8-sig")
     update_progress(output_dir, "trades_ready", trade_count=len(trades), skipped_count=len(skipped))
 
     summary_df, gap_df = summarize_top(trades)
-    summary_df.to_csv(output_dir / "feature_summary.csv", index=False, encoding="utf-8-sig")
-    gap_df.to_csv(output_dir / "gap_group_summary.csv", index=False, encoding="utf-8-sig")
+    summary_df.to_csv(output_dir / "feature_exit_summary.csv", index=False, encoding="utf-8-sig")
+    gap_df.to_csv(output_dir / "feature_exit_gap_summary.csv", index=False, encoding="utf-8-sig")
     best_only = summary_df.groupby("family", as_index=False).head(1) if not summary_df.empty else pd.DataFrame()
-    best_only.to_csv(output_dir / "family_best_summary.csv", index=False, encoding="utf-8-sig")
+    best_only.to_csv(output_dir / "best_exit_by_metric.csv", index=False, encoding="utf-8-sig")
 
     summary_json = build_summary_json(candidates, trades, skipped, summary_df, gap_df)
     (output_dir / "summary.json").write_text(json.dumps(summary_json, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
@@ -517,7 +525,11 @@ def main() -> None:
     file_limit = int(args.file_limit)
     if args.mode == "full":
         file_limit = 0
-    run(file_limit=file_limit, output_dir=output_dir, smoke=args.mode == "smoke")
+    try:
+        run(file_limit=file_limit, output_dir=output_dir, smoke=args.mode == "smoke")
+    except Exception as exc:
+        write_error(output_dir, exc)
+        raise
 
 
 if __name__ == "__main__":

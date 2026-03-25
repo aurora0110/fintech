@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import traceback
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -12,7 +13,7 @@ import pandas as pd
 
 
 ROOT = Path("/Users/lidongyang/Desktop/Qstrategy")
-DATA_DIR = ROOT / "data" / "20260317" / "normal"
+DATA_DIR = ROOT / "data" / "20260324"
 RESULT_ROOT = ROOT / "results"
 
 FORMAL_SELECTED_PATH = ROOT / "results" / "brick_green_exit_compare_v1_full_20260323" / "selected_signals.csv"
@@ -22,10 +23,10 @@ RELAXED_BEST_CONFIG_PATH = ROOT / "results" / "brick_comprehensive_lab_full_2026
 EXCLUDE_START = pd.Timestamp("2015-06-01")
 EXCLUDE_END = pd.Timestamp("2024-09-30")
 INITIAL_CAPITAL = 1_000_000.0
-TP_LIST = [0.02, 0.025, 0.03, 0.035, 0.04, 0.045, 0.05]
+TP_LIST = [0.02, 0.025, 0.03, 0.035, 0.04, 0.05, 0.06]
 SL_MULT_LIST = [0.985, 0.99, 0.995]
-MAX_HOLD_LIST = [2, 3, 4, 5]
-FORWARD_HORIZONS = [3, 5]
+MAX_HOLD_LIST = [2, 3, 5, 7]
+FORWARD_HORIZONS = [1, 3, 5, 7]
 HIT_LEVELS = [0.01, 0.02, 0.03, 0.05]
 
 
@@ -52,6 +53,17 @@ def update_progress(result_dir: Path, stage: str, **extra: Any) -> None:
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+
+
+def write_error(result_dir: Path, exc: BaseException) -> None:
+    payload = {
+        "error_type": type(exc).__name__,
+        "message": str(exc),
+        "traceback": traceback.format_exc(),
+        "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    (result_dir / "error.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    update_progress(result_dir, "error", error_type=type(exc).__name__, message=str(exc))
 
 
 def read_text_auto(path: Path) -> list[str]:
@@ -361,6 +373,14 @@ def summarize_trades(trades: pd.DataFrame, strategy_name: str) -> dict[str, Any]
     rets = trades["return_pct"].astype(float)
     wins = rets[rets > 0]
     losses = rets[rets < 0]
+    max_losing_streak = 0
+    current_losing_streak = 0
+    for ret in rets.to_list():
+        if ret < 0:
+            current_losing_streak += 1
+            max_losing_streak = max(max_losing_streak, current_losing_streak)
+        else:
+            current_losing_streak = 0
     profit_factor = float(wins.sum() / abs(losses.sum())) if not losses.empty and abs(losses.sum()) > 1e-12 else float("inf")
     equity = build_signal_basket_curve(trades)
     dd = equity["equity"] / equity["equity"].cummax() - 1.0
@@ -375,7 +395,9 @@ def summarize_trades(trades: pd.DataFrame, strategy_name: str) -> dict[str, Any]
         "win_rate": float((rets > 0).mean()),
         "avg_trade_return": float(rets.mean()),
         "median_trade_return": float(rets.median()),
+        "p90_trade_return": float(rets.quantile(0.9)),
         "avg_holding_days": float(trades["hold_days"].mean()),
+        "max_consecutive_failures": int(max_losing_streak),
         "profit_factor": profit_factor,
         "total_return_signal_basket": float(equity["equity"].iloc[-1] / INITIAL_CAPITAL - 1.0) if not equity.empty else 0.0,
         "annual_return_signal_basket": annual,
@@ -393,6 +415,7 @@ def aggregate_forward_metrics(forward_df: pd.DataFrame) -> pd.DataFrame:
             row[f"mfe_{horizon}d_median"] = float(g[f"mfe_{horizon}d"].median())
             row[f"mae_{horizon}d_mean"] = float(g[f"mae_{horizon}d"].mean())
             row[f"close_ret_{horizon}d_mean"] = float(g[f"close_ret_{horizon}d"].mean())
+            row[f"close_ret_{horizon}d_median"] = float(g[f"close_ret_{horizon}d"].median())
             for level in HIT_LEVELS:
                 key = str(level).replace(".", "")
                 row[f"hit_up_{key}_{horizon}d_rate"] = float(g[f"hit_up_{key}_{horizon}d"].mean())
@@ -421,6 +444,21 @@ def select_best_rows(grid_df: pd.DataFrame) -> pd.DataFrame:
         best_avg["selection_metric"] = "best_avg_trade_return"
         rows.extend([best_return, best_win, best_avg])
     return pd.concat(rows, ignore_index=True)
+
+
+def export_best_metric_equities(best_rows: pd.DataFrame, output_dir: Path) -> None:
+    for row in best_rows.itertuples(index=False):
+        strategy = str(row.strategy)
+        tp_pct = float(row.take_profit_pct)
+        sl_mult = float(row.stop_loss_multiplier)
+        hold_days = int(row.max_hold_days)
+        metric = str(row.selection_metric).replace("best_", "")
+        safe_name = f"{strategy}_tp{tp_pct:.3f}_sl{sl_mult:.3f}_hold{hold_days}".replace(".", "")
+        equity_src = output_dir / f"equity_{safe_name}.csv"
+        if not equity_src.exists():
+            continue
+        equity_dst = output_dir / f"equity_by_best_metric_{strategy}_{metric}.csv"
+        equity_dst.write_text(equity_src.read_text(encoding="utf-8-sig"), encoding="utf-8-sig")
 
 
 def run(mode: str, output_dir: Path, signal_limit: int) -> None:
@@ -483,7 +521,8 @@ def run(mode: str, output_dir: Path, signal_limit: int) -> None:
         }
         for c in all_candidates
     ]
-    pd.DataFrame(candidate_rows).to_csv(output_dir / "selected_candidates.csv", index=False, encoding="utf-8-sig")
+    aligned_df = pd.DataFrame(candidate_rows)
+    aligned_df.to_csv(output_dir / "selected_candidates_aligned.csv", index=False, encoding="utf-8-sig")
 
     forward_rows = []
     for candidate in all_candidates:
@@ -528,14 +567,20 @@ def run(mode: str, output_dir: Path, signal_limit: int) -> None:
                     equity_df.to_csv(output_dir / f"equity_{safe_name}.csv", index=False, encoding="utf-8-sig")
                     best_equity_files.append({"strategy": strategy, "tp": tp_pct, "sl": sl_mult, "hold": hold_days, "trade_count": len(trade_df)})
     grid_df = pd.DataFrame(grid_rows)
-    grid_df.to_csv(output_dir / "grid_results.csv", index=False, encoding="utf-8-sig")
+    grid_df.to_csv(output_dir / "trade_grid_results.csv", index=False, encoding="utf-8-sig")
     pd.DataFrame(best_equity_files).to_csv(output_dir / "equity_file_index.csv", index=False, encoding="utf-8-sig")
     best_rows = select_best_rows(grid_df)
     best_rows.to_csv(output_dir / "best_by_metric.csv", index=False, encoding="utf-8-sig")
+    export_best_metric_equities(best_rows, output_dir)
     update_progress(output_dir, "grid_ready", rows=len(grid_df))
+
+    confidence = "high"
+    if min(len(formal_candidates), len(relaxed_candidates)) < 30 or min(len(formal_candidates), len(relaxed_candidates)) / max(len(formal_candidates), len(relaxed_candidates)) < 0.5:
+        confidence = "low"
 
     summary = {
         "mode": mode,
+        "confidence": confidence,
         "date_range": {
             "signal_start": str(date_start.date()),
             "signal_end": str(date_end.date()),
@@ -554,6 +599,11 @@ def run(mode: str, output_dir: Path, signal_limit: int) -> None:
             "formal_best 使用正式 BRICK baseline 的已选信号，relaxed_fusion 使用 BRICK 综合实验 final_test 冠军的已选信号。",
             "为了避免混入口径，这轮只在两者重叠的 final_test 时间区间内对比。",
         ],
+        "sample_imbalance_note": {
+            "formal_best": len(formal_candidates),
+            "relaxed_fusion": len(relaxed_candidates),
+            "ratio_min_over_max": float(min(len(formal_candidates), len(relaxed_candidates)) / max(len(formal_candidates), len(relaxed_candidates))) if max(len(formal_candidates), len(relaxed_candidates)) > 0 else 0.0,
+        },
     }
     if not forward_summary.empty:
         hit_col = "hit_up_003_5d_rate"
@@ -587,7 +637,11 @@ def main() -> None:
     if args.mode == "smoke" and signal_limit <= 0:
         signal_limit = 200
 
-    run(args.mode, output_dir, signal_limit)
+    try:
+        run(args.mode, output_dir, signal_limit)
+    except Exception as exc:
+        write_error(output_dir, exc)
+        raise
 
 
 if __name__ == "__main__":
