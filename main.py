@@ -1,6 +1,6 @@
 import time
 import yaml
-from utils import b1filter, b1filter_similar_indicators_ml, b3filter, pinfilter, brick_filter, holdprint, selectprint, stockDataValidator, stoploss, takeprofit, lgbm_p3_shallower_core10_daily_top9_filter
+from utils import b1filter, b3filter, pinfilter, brick_filter, holdprint, selectprint, stockDataValidator, stoploss, takeprofit, lgbm_p3_shallower_core10_daily_top9_filter, b1filter_similar_filter
 from utils.strategy_feature_cache import StrategyFeatureCache
 from datetime import datetime
 from pathlib import Path
@@ -82,7 +82,11 @@ def _scan_one_file(file_path_str: str):
         ])
 
     try:
-        b1_similar_ml_result = b1filter_similar_indicators_ml.check(str(file_path), hold_list, feature_cache=feature_cache)
+        b1_similar_ml_result = b1filter_similar_filter.check(
+            str(file_path),
+            hold_list,
+            feature_cache=feature_cache,
+        )
         if b1_similar_ml_result[0] == 1:
             result["b1_similar_ml_candidates"].append(
                 {
@@ -308,6 +312,9 @@ if __name__ == '__main__':
         file_paths = list(Path(data_dir_after).glob('*.txt'))
 
     print(f"实际扫描日期：{fallback_date_str}")
+    print("\n【B1 相似度冠军策略】")
+    print(b1filter_similar_filter.strategy_description())
+    print(b1filter_similar_filter.operation_suggestion())
         
     result_map = {
         "sell_list": sell_list,

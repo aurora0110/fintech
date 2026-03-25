@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import math
 import re
@@ -8,7 +9,7 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 
 import numpy as np
 import pandas as pd
@@ -60,7 +61,6 @@ DATA_DIR = Path("/Users/lidongyang/Desktop/Qstrategy/data")
 
 RUN_TS = datetime.now().strftime("%Y%m%d_%H%M%S")
 OUTPUT_DIR = Path(f"/Users/lidongyang/Desktop/Qstrategy/results/final_similarity_lab_relaxed_{RUN_TS}")
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 MIN_BARS = 160
 HOLD_DAYS = 3
@@ -68,6 +68,9 @@ TARGET_RETURN = 0.035
 STOP_LOSS = 0.99
 EPS = 1e-12
 MAX_WORKERS = 8
+DTW_BAND_RATIO = 0.20
+DTW_SUPERVISED_TOPK = 20
+DTW_PIPELINE_TOPK = 10
 
 # 三段切分：research / validation / final_test
 RESEARCH_RATIO = 0.60
@@ -108,6 +111,7 @@ SELECT_MODES = [
     ("threshold", 0.90),
 ]
 DAILY_TOPN_LIST = [5, 7, 8, 9, 10]
+VALIDATION_FINE_TOPK = 200
 
 SUPERVISED_FEATURES = [
     "succ_max_corr", "succ_mean_corr",
@@ -299,6 +303,8 @@ def compute_relaxed_brick_features(df: pd.DataFrame) -> pd.DataFrame:
     x["brick_green"] = x["brick_green_len"] > 0
     x["prev_green_streak"] = pd.Series(calc_green_streak(x["brick_green"].to_numpy()), index=x.index).shift(1)
     x["green_streak"] = pd.Series(calc_green_streak(x["brick_green"].to_numpy()), index=x.index)
+    x["red_streak"] = pd.Series(calc_green_streak(x["brick_red"].to_numpy()), index=x.index)
+    x["prev_red_streak"] = x["red_streak"].shift(1)
     x["rebound_ratio"] = safe_div(x["brick_red_len"], x["brick_green_len"].shift(1), default=np.nan)
 
     x["pattern_a_relaxed"] = (
@@ -416,6 +422,7 @@ def build_samples_for_one_stock(file_path: str) -> List[Dict[str, Any]]:
             "entry_date": pd.Timestamp(x.iloc[idx + 1]["date"]),
             "exit_date": pd.Timestamp(label_info["exit_date"]),
             "entry_price": next_open,
+            "signal_low": float(row["low"]) if pd.notna(row["low"]) else np.nan,
 
             "ret1": float(row["ret1"]) if pd.notna(row["ret1"]) else 0.0,
             "ret5": float(row["ret5"]) if pd.notna(row["ret5"]) else 0.0,
@@ -427,6 +434,7 @@ def build_samples_for_one_stock(file_path: str) -> List[Dict[str, Any]]:
             "ma10_slope_5": float(row["ma10_slope_5"]) if pd.notna(row["ma10_slope_5"]) else 0.0,
             "ma20_slope_5": float(row["ma20_slope_5"]) if pd.notna(row["ma20_slope_5"]) else 0.0,
             "brick_red_len": float(row["brick_red_len"]) if pd.notna(row["brick_red_len"]) else 0.0,
+            "brick_green_len": float(row["brick_green_len"]) if pd.notna(row["brick_green_len"]) else 0.0,
             "brick_green_len_prev": float(x["brick_green_len"].shift(1).iloc[idx]) if idx >= 1 and pd.notna(x["brick_green_len"].shift(1).iloc[idx]) else 0.0,
             "rebound_ratio": float(row["rebound_ratio"]) if pd.notna(row["rebound_ratio"]) else 0.0,
             "RSI14": float(row["RSI14"]) if pd.notna(row["RSI14"]) else 0.0,
@@ -440,6 +448,11 @@ def build_samples_for_one_stock(file_path: str) -> List[Dict[str, Any]]:
             "upper_shadow_pct": float(row["upper_shadow_pct"]) if pd.notna(row["upper_shadow_pct"]) else 0.0,
             "lower_shadow_pct": float(row["lower_shadow_pct"]) if pd.notna(row["lower_shadow_pct"]) else 0.0,
             "close_location": float(row["close_location"]) if pd.notna(row["close_location"]) else 0.0,
+            "prev_green_streak": int(row["prev_green_streak"]) if pd.notna(row["prev_green_streak"]) else 0,
+            "prev_red_streak": int(row["prev_red_streak"]) if pd.notna(row["prev_red_streak"]) else 0,
+            "trend_ok": bool(row["trend_line"] > row["long_line"]) if pd.notna(row["trend_line"]) and pd.notna(row["long_line"]) else False,
+            "green4_flag": bool(pd.notna(row["prev_green_streak"]) and int(row["prev_green_streak"]) == 4),
+            "red4_flag": bool(pd.notna(row["prev_red_streak"]) and int(row["prev_red_streak"]) == 4),
 
             "pattern_a_relaxed": bool(row["pattern_a_relaxed"]),
             "pattern_b_relaxed": bool(row["pattern_b_relaxed"]),
@@ -466,27 +479,57 @@ def apply_stock_signal_cooldown(records: List[Dict[str, Any]], cooldown_days: in
     return keep
 
 
-def load_full_signal_dataset() -> List[Dict[str, Any]]:
+def list_normal_data_dirs(data_dir: Path | None = None) -> List[Path]:
+    root = Path(data_dir) if data_dir is not None else DATA_DIR
     all_dirs = []
-    for date_dir in sorted(DATA_DIR.glob("20*")):
+    for date_dir in sorted(root.glob("20*")):
         normal_dir = date_dir / "normal"
         if normal_dir.exists():
             all_dirs.append(normal_dir)
+    return all_dirs
+
+
+def list_normal_file_paths(data_dir: Path | None = None, file_limit: int = 0) -> List[Path]:
+    file_paths: List[Path] = []
+    for normal_dir in list_normal_data_dirs(data_dir=data_dir):
+        file_paths.extend(sorted(normal_dir.glob("*.txt")))
+    if file_limit and file_limit > 0:
+        file_paths = file_paths[:file_limit]
+    return file_paths
+
+
+def load_relaxed_feature_map(data_dir: Path | None = None, file_limit: int = 0) -> Dict[str, pd.DataFrame]:
+    feature_map: Dict[str, pd.DataFrame] = {}
+    for file_path in tqdm(list_normal_file_paths(data_dir=data_dir, file_limit=file_limit), desc="构建特征图谱", ncols=100):
+        df = load_stock_data(str(file_path))
+        if df is None or df.empty:
+            continue
+        x = compute_relaxed_brick_features(df)
+        code = str(x["code"].iloc[0])
+        feature_map[code] = x.reset_index(drop=True)
+    return feature_map
+
+
+def load_full_signal_dataset(file_limit: int = 0, max_workers: int = MAX_WORKERS, data_dir: Path | None = None) -> List[Dict[str, Any]]:
+    all_dirs = list_normal_data_dirs(data_dir=data_dir)
 
     if not all_dirs:
         raise ValueError("未找到数据目录")
 
-    file_paths = []
-    for normal_dir in all_dirs:
-        file_paths.extend(sorted(normal_dir.glob("*.txt")))
+    file_paths = list_normal_file_paths(data_dir=data_dir, file_limit=file_limit)
 
     print(f"加载 {len(file_paths)} 个股票文件...")
 
     all_rows: List[Dict[str, Any]] = []
-    with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        mapped = executor.map(build_samples_for_one_stock, [str(p) for p in file_paths], chunksize=20)
-        for rows in tqdm(mapped, total=len(file_paths), desc="构建样本", ncols=100):
-            all_rows.extend(rows)
+    try:
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            mapped = executor.map(build_samples_for_one_stock, [str(p) for p in file_paths], chunksize=20)
+            for rows in tqdm(mapped, total=len(file_paths), desc="构建样本", ncols=100):
+                all_rows.extend(rows)
+    except PermissionError:
+        print("ProcessPoolExecutor 受系统权限限制，自动回退串行模式...")
+        for path in tqdm(file_paths, total=len(file_paths), desc="构建样本(串行)", ncols=100):
+            all_rows.extend(build_samples_for_one_stock(str(path)))
 
     all_rows = apply_stock_signal_cooldown(all_rows, cooldown_days=STOCK_SIGNAL_COOLDOWN_DAYS)
     all_rows = sorted(all_rows, key=lambda r: r["date"])
@@ -614,11 +657,14 @@ def simple_dtw_distance(a: np.ndarray, b: np.ndarray) -> float:
     a = np.asarray(a, dtype=float)
     b = np.asarray(b, dtype=float)
     n, m = len(a), len(b)
+    band = max(2, int(max(n, m) * DTW_BAND_RATIO))
     dp = np.full((n + 1, m + 1), np.inf)
     dp[0, 0] = 0.0
     for i in range(1, n + 1):
         ai = a[i - 1]
-        for j in range(1, m + 1):
+        j_start = max(1, i - band)
+        j_end = min(m, i + band)
+        for j in range(j_start, j_end + 1):
             cost = abs(ai - b[j - 1])
             dp[i, j] = cost + min(dp[i - 1, j], dp[i, j - 1], dp[i - 1, j - 1])
     return float(dp[n, m])
@@ -720,6 +766,101 @@ def fft_sim(a: np.ndarray, b: np.ndarray) -> float:
     return corr_sim(fa, fb)
 
 
+def _stack_vectors(vectors: List[np.ndarray]) -> np.ndarray:
+    if not vectors:
+        return np.empty((0, 0), dtype=float)
+    return np.vstack([np.asarray(v, dtype=float) for v in vectors])
+
+
+def _safe_row_unit(mat: np.ndarray) -> np.ndarray:
+    if mat.size == 0:
+        return mat
+    centered = mat - np.nanmean(mat, axis=1, keepdims=True)
+    denom = np.linalg.norm(centered, axis=1, keepdims=True)
+    denom = np.where(denom < EPS, np.nan, denom)
+    out = centered / denom
+    return np.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
+
+
+def batch_corr_stats(stage_mat: np.ndarray, template_mat: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    if stage_mat.size == 0 or template_mat.size == 0:
+        n = len(stage_mat)
+        return np.full(n, -1.0), np.zeros(n), np.zeros(n)
+    stage_unit = _safe_row_unit(stage_mat)
+    template_unit = _safe_row_unit(template_mat)
+    sims = stage_unit @ template_unit.T
+    return sims.max(axis=1), sims.mean(axis=1), sims.std(axis=1)
+
+
+def batch_cosine_stats(stage_mat: np.ndarray, template_mat: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    if stage_mat.size == 0 or template_mat.size == 0:
+        n = len(stage_mat)
+        return np.full(n, -1.0), np.zeros(n), np.zeros(n)
+    stage_norm = np.linalg.norm(stage_mat, axis=1, keepdims=True)
+    template_norm = np.linalg.norm(template_mat, axis=1, keepdims=True)
+    stage_unit = np.divide(stage_mat, np.where(stage_norm < EPS, np.nan, stage_norm))
+    template_unit = np.divide(template_mat, np.where(template_norm < EPS, np.nan, template_norm))
+    stage_unit = np.nan_to_num(stage_unit, nan=0.0, posinf=0.0, neginf=0.0)
+    template_unit = np.nan_to_num(template_unit, nan=0.0, posinf=0.0, neginf=0.0)
+    sims = stage_unit @ template_unit.T
+    return sims.max(axis=1), sims.mean(axis=1), sims.std(axis=1)
+
+
+def batch_euclidean_stats(stage_mat: np.ndarray, template_mat: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    if stage_mat.size == 0 or template_mat.size == 0:
+        n = len(stage_mat)
+        return np.full(n, -1.0), np.zeros(n), np.zeros(n)
+    a2 = np.sum(stage_mat * stage_mat, axis=1, keepdims=True)
+    b2 = np.sum(template_mat * template_mat, axis=1, keepdims=True).T
+    dist2 = np.maximum(a2 + b2 - 2.0 * (stage_mat @ template_mat.T), 0.0)
+    sims = 1.0 / (1.0 + np.sqrt(dist2))
+    return sims.max(axis=1), sims.mean(axis=1), sims.std(axis=1)
+
+
+def _batch_transform_matrix(mat: np.ndarray, scorer: str) -> np.ndarray:
+    if mat.size == 0:
+        return mat
+    if scorer == "paa":
+        return np.vstack([paa_transform(row, 7) for row in mat])
+    if scorer == "wavelet":
+        return np.vstack([wavelet_features(row) for row in mat])
+    if scorer == "fft":
+        return np.vstack([fft_features(row) for row in mat])
+    return mat
+
+
+def batch_vector_scorer_stats(stage_mat: np.ndarray, template_mat: np.ndarray, scorer: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    if scorer == "corr":
+        return batch_corr_stats(stage_mat, template_mat)
+    if scorer == "cosine":
+        return batch_cosine_stats(stage_mat, template_mat)
+    if scorer == "euclidean":
+        return batch_euclidean_stats(stage_mat, template_mat)
+    if scorer == "paa":
+        return batch_euclidean_stats(_batch_transform_matrix(stage_mat, scorer), _batch_transform_matrix(template_mat, scorer))
+    if scorer == "wavelet":
+        return batch_corr_stats(_batch_transform_matrix(stage_mat, scorer), _batch_transform_matrix(template_mat, scorer))
+    if scorer == "fft":
+        return batch_corr_stats(_batch_transform_matrix(stage_mat, scorer), _batch_transform_matrix(template_mat, scorer))
+    raise ValueError(f"不支持批量 scorer: {scorer}")
+
+
+def batch_topk_indices_by_corr(stage_mat: np.ndarray, template_mat: np.ndarray, topk: int) -> Tuple[np.ndarray, np.ndarray]:
+    if stage_mat.size == 0 or template_mat.size == 0:
+        n = len(stage_mat)
+        return np.zeros((n, 0), dtype=int), np.zeros((n, 0), dtype=float)
+    stage_unit = _safe_row_unit(stage_mat)
+    template_unit = _safe_row_unit(template_mat)
+    sims = stage_unit @ template_unit.T
+    k = min(topk, sims.shape[1])
+    part = np.argpartition(-sims, kth=k - 1, axis=1)[:, :k]
+    part_scores = np.take_along_axis(sims, part, axis=1)
+    order = np.argsort(-part_scores, axis=1)
+    top_idx = np.take_along_axis(part, order, axis=1)
+    top_scores = np.take_along_axis(sims, top_idx, axis=1)
+    return top_idx, top_scores
+
+
 def topk_indices_by_score(scores: List[float], k: int) -> List[int]:
     if not scores:
         return []
@@ -739,7 +880,7 @@ def score_candidate_vs_templates(vec: np.ndarray, templates: List[np.ndarray], s
 
     if scorer == "pipeline_corr_dtw":
         corrs = [corr_sim(vec, t) for t in templates]
-        top_idx = topk_indices_by_score(corrs, k=min(10, len(corrs)))
+        top_idx = topk_indices_by_score(corrs, k=min(DTW_PIPELINE_TOPK, len(corrs)))
         if not top_idx:
             return {"score": -1.0, "aux1": -1.0, "aux2": 0.0}
         top_corr = [corrs[i] for i in top_idx]
@@ -779,16 +920,30 @@ def score_candidate_vs_templates(vec: np.ndarray, templates: List[np.ndarray], s
 # =========================
 def build_supervised_similarity_features(records: List[Dict[str, Any]], success_templates: List[np.ndarray], failure_templates: List[np.ndarray], seq_len: int, rep: str) -> pd.DataFrame:
     rows = []
-    for r in records:
-        vec = get_rep_vector(r, seq_len, rep)
+    stage_mat = _stack_vectors([get_rep_vector(r, seq_len, rep) for r in records])
+    succ_mat = _stack_vectors(success_templates)
+    fail_mat = _stack_vectors(failure_templates)
 
-        succ_corrs = [corr_sim(vec, t) for t in success_templates] if success_templates else [0.0]
-        succ_dtws = [dtw_sim(vec, t) for t in success_templates] if success_templates else [0.0]
-        succ_eucs = [euclidean_sim(vec, t) for t in success_templates] if success_templates else [0.0]
+    succ_max_corr, succ_mean_corr, _ = batch_corr_stats(stage_mat, succ_mat)
+    succ_max_euc, succ_mean_euc, _ = batch_euclidean_stats(stage_mat, succ_mat)
+    fail_max_corr, fail_mean_corr, _ = batch_corr_stats(stage_mat, fail_mat)
+    fail_max_euc, fail_mean_euc, _ = batch_euclidean_stats(stage_mat, fail_mat)
 
-        fail_corrs = [corr_sim(vec, t) for t in failure_templates] if failure_templates else [0.0]
-        fail_dtws = [dtw_sim(vec, t) for t in failure_templates] if failure_templates else [0.0]
-        fail_eucs = [euclidean_sim(vec, t) for t in failure_templates] if failure_templates else [0.0]
+    succ_top_idx, _ = batch_topk_indices_by_corr(stage_mat, succ_mat, DTW_SUPERVISED_TOPK)
+    fail_top_idx, _ = batch_topk_indices_by_corr(stage_mat, fail_mat, DTW_SUPERVISED_TOPK)
+
+    for i, r in enumerate(records):
+        vec = stage_mat[i]
+
+        if succ_mat.size > 0 and succ_top_idx.shape[1] > 0:
+            succ_dtws = [dtw_sim(vec, succ_mat[j]) for j in succ_top_idx[i]]
+        else:
+            succ_dtws = [0.0]
+
+        if fail_mat.size > 0 and fail_top_idx.shape[1] > 0:
+            fail_dtws = [dtw_sim(vec, fail_mat[j]) for j in fail_top_idx[i]]
+        else:
+            fail_dtws = [0.0]
 
         rows.append({
             "code": r["code"],
@@ -800,19 +955,19 @@ def build_supervised_similarity_features(records: List[Dict[str, Any]], success_
             "exit_date": r["exit_date"],
             "entry_price": r["entry_price"],
 
-            "succ_max_corr": float(np.max(succ_corrs)),
-            "succ_mean_corr": float(np.mean(succ_corrs)),
+            "succ_max_corr": float(succ_max_corr[i]),
+            "succ_mean_corr": float(succ_mean_corr[i]),
             "succ_max_dtw": float(np.max(succ_dtws)),
             "succ_mean_dtw": float(np.mean(succ_dtws)),
-            "succ_max_euc": float(np.max(succ_eucs)),
-            "succ_mean_euc": float(np.mean(succ_eucs)),
+            "succ_max_euc": float(succ_max_euc[i]),
+            "succ_mean_euc": float(succ_mean_euc[i]),
 
-            "fail_max_corr": float(np.max(fail_corrs)),
-            "fail_mean_corr": float(np.mean(fail_corrs)),
+            "fail_max_corr": float(fail_max_corr[i]),
+            "fail_mean_corr": float(fail_mean_corr[i]),
             "fail_max_dtw": float(np.max(fail_dtws)),
             "fail_mean_dtw": float(np.mean(fail_dtws)),
-            "fail_max_euc": float(np.max(fail_eucs)),
-            "fail_mean_euc": float(np.mean(fail_eucs)),
+            "fail_max_euc": float(fail_max_euc[i]),
+            "fail_mean_euc": float(fail_mean_euc[i]),
 
             "ret1": r["ret1"],
             "ret5": r["ret5"],
@@ -920,12 +1075,12 @@ def apply_selection_rules(df: pd.DataFrame, cfg: StrategyConfig, score_col: str)
     if df.empty:
         return df.copy()
 
-    x = df.copy()
-    x = x.sort_values(["date", score_col], ascending=[True, False]).reset_index(drop=True)
+    if {"date_rank", "date_count", "entry_rank"}.issubset(df.columns):
+        x = df.copy()
+    else:
+        x = prepare_selection_frame(df, score_col)
 
     if cfg.select_mode == "top_pct":
-        x["date_rank"] = x.groupby("date").cumcount() + 1
-        x["date_count"] = x.groupby("date")["date"].transform("count")
         x["date_keep_n"] = np.ceil(x["date_count"] * cfg.select_value).astype(int)
         x["date_keep_n"] = x["date_keep_n"].clip(lower=1)
         x = x[x["date_rank"] <= x["date_keep_n"]].copy()
@@ -939,8 +1094,20 @@ def apply_selection_rules(df: pd.DataFrame, cfg: StrategyConfig, score_col: str)
     if x.empty:
         return x
 
-    x = x.sort_values(["entry_date", score_col], ascending=[True, False]).reset_index(drop=True)
-    x = x.groupby("entry_date", group_keys=False).head(cfg.daily_topn).reset_index(drop=True)
+    x = x[x["entry_rank"] <= cfg.daily_topn].copy()
+    return x
+
+
+def prepare_selection_frame(df: pd.DataFrame, score_col: str) -> pd.DataFrame:
+    if df.empty:
+        return df.copy()
+
+    x = df.copy()
+    x = x.sort_values(["date", score_col], ascending=[True, False], kind="mergesort").reset_index(drop=True)
+    x["date_rank"] = x.groupby("date").cumcount() + 1
+    x["date_count"] = x.groupby("date")["date"].transform("count")
+    x = x.sort_values(["entry_date", score_col], ascending=[True, False], kind="mergesort").reset_index(drop=True)
+    x["entry_rank"] = x.groupby("entry_date").cumcount() + 1
     return x
 
 
@@ -969,7 +1136,23 @@ def prepare_daily_close_map(records_df: pd.DataFrame) -> Dict[Tuple[pd.Timestamp
     return close_map
 
 
-def run_portfolio_backtest(signal_df: pd.DataFrame, strategy_name: str, score_col: str):
+def prepare_event_dates(records_df: pd.DataFrame) -> List[pd.Timestamp]:
+    if records_df.empty:
+        return []
+    dates = pd.concat([records_df["entry_date"], records_df["exit_date"]]).drop_duplicates().sort_values()
+    return list(pd.to_datetime(dates))
+
+
+def interpolate_price_for_date(current_date: pd.Timestamp, entry_date: pd.Timestamp, exit_date: pd.Timestamp, entry_price: float, final_price: float) -> float:
+    total_days = max((exit_date - entry_date).days, 0)
+    if total_days <= 0:
+        return final_price
+    elapsed = (current_date - entry_date).days
+    frac = min(max(elapsed / total_days, 0.0), 1.0)
+    return entry_price + (final_price - entry_price) * frac
+
+
+def run_portfolio_backtest(signal_df: pd.DataFrame, strategy_name: str, score_col: str, return_details: bool = True):
     if signal_df.empty:
         return pd.DataFrame(), pd.DataFrame(), {
             "strategy": strategy_name,
@@ -985,8 +1168,7 @@ def run_portfolio_backtest(signal_df: pd.DataFrame, strategy_name: str, score_co
     df["entry_date"] = pd.to_datetime(df["entry_date"])
     df["exit_date"] = pd.to_datetime(df["exit_date"])
 
-    mtm_map = prepare_daily_close_map(df)
-    all_dates = sorted(pd.to_datetime(pd.Series(pd.concat([df["entry_date"], df["exit_date"]]).unique())))
+    all_dates = prepare_event_dates(df)
     if not all_dates:
         return pd.DataFrame(), pd.DataFrame(), {
             "strategy": strategy_name,
@@ -998,20 +1180,38 @@ def run_portfolio_backtest(signal_df: pd.DataFrame, strategy_name: str, score_co
             "ending_equity": INITIAL_CAPITAL,
         }
 
-    full_dates = pd.date_range(min(all_dates), max(all_dates), freq="D")
+    if return_details:
+        mtm_map = prepare_daily_close_map(df)
+        eval_dates = pd.date_range(min(all_dates), max(all_dates), freq="D")
+    else:
+        mtm_map = {}
+        eval_dates = pd.DatetimeIndex(all_dates)
     entry_group = {d: g.copy() for d, g in df.groupby("entry_date")}
 
     cash = INITIAL_CAPITAL
     open_positions: List[Dict[str, Any]] = []
     closed_positions: List[Dict[str, Any]] = []
+    closed_trade_count = 0
+    settled_trade_count = 0
+    settled_win_count = 0
+    trade_ret_sum = 0.0
     equity_curve = []
+    running_cummax = INITIAL_CAPITAL
+    max_dd = 0.0
 
-    for current_date in full_dates:
+    for current_date in eval_dates:
         still_open = []
         for pos in open_positions:
             if pos["exit_date"] <= current_date:
                 cash += pos["shares"] * pos["exit_price"]
-                closed_positions.append(pos)
+                if return_details:
+                    closed_positions.append(pos)
+                closed_trade_count += 1
+                trade_ret_sum += pos["ret"]
+                if pos["result"] in ["success", "failure"]:
+                    settled_trade_count += 1
+                    if pos["result"] == "success":
+                        settled_win_count += 1
             else:
                 still_open.append(pos)
         open_positions = still_open
@@ -1043,54 +1243,71 @@ def run_portfolio_backtest(signal_df: pd.DataFrame, strategy_name: str, score_co
 
         holding_value = 0.0
         for pos in open_positions:
-            px = mtm_map.get((current_date, pos["code"]), pos["entry_price"])
+            if return_details:
+                px = mtm_map.get((current_date, pos["code"]), pos["entry_price"])
+            else:
+                px = interpolate_price_for_date(
+                    current_date=current_date,
+                    entry_date=pos["entry_date"],
+                    exit_date=pos["exit_date"],
+                    entry_price=pos["entry_price"],
+                    final_price=pos["exit_price"],
+                )
             holding_value += pos["shares"] * px
 
         equity = cash + holding_value
-        equity_curve.append({
-            "date": current_date,
-            "cash": cash,
-            "holding_value": holding_value,
-            "equity": equity,
-            "open_positions": len(open_positions),
-        })
+        running_cummax = max(running_cummax, equity)
+        if running_cummax > EPS:
+            max_dd = min(max_dd, equity / running_cummax - 1.0)
+        if return_details:
+            equity_curve.append({
+                "date": current_date,
+                "cash": cash,
+                "holding_value": holding_value,
+                "equity": equity,
+                "open_positions": len(open_positions),
+            })
 
     if open_positions:
         for pos in open_positions:
             cash += pos["shares"] * pos["exit_price"]
-            closed_positions.append(pos)
-        equity_curve.append({
-            "date": full_dates[-1] + pd.Timedelta(days=1),
-            "cash": cash,
-            "holding_value": 0.0,
-            "equity": cash,
-            "open_positions": 0,
-        })
+            if return_details:
+                closed_positions.append(pos)
+            closed_trade_count += 1
+            trade_ret_sum += pos["ret"]
+            if pos["result"] in ["success", "failure"]:
+                settled_trade_count += 1
+                if pos["result"] == "success":
+                    settled_win_count += 1
+        if return_details:
+            equity_curve.append({
+                "date": eval_dates[-1] + pd.Timedelta(days=1),
+                "cash": cash,
+                "holding_value": 0.0,
+                "equity": cash,
+                "open_positions": 0,
+            })
 
-    equity_df = pd.DataFrame(equity_curve).sort_values("date").reset_index(drop=True)
-    trades_df = pd.DataFrame(closed_positions)
-
-    if len(equity_df) > 0:
-        equity_df["cummax"] = equity_df["equity"].cummax()
-        equity_df["drawdown"] = equity_df["equity"] / equity_df["cummax"] - 1.0
-        max_dd = equity_df["drawdown"].min()
+    if return_details:
+        equity_df = pd.DataFrame(equity_curve).sort_values("date").reset_index(drop=True)
+        trades_df = pd.DataFrame(closed_positions)
+        if len(equity_df) > 0:
+            equity_df["cummax"] = equity_df["equity"].cummax()
+            equity_df["drawdown"] = equity_df["equity"] / equity_df["cummax"] - 1.0
+            max_dd = float(equity_df["drawdown"].min())
+        ending_equity = float(equity_df["equity"].iloc[-1]) if len(equity_df) > 0 else INITIAL_CAPITAL
     else:
-        max_dd = 0.0
+        equity_df = pd.DataFrame()
+        trades_df = pd.DataFrame()
+        ending_equity = cash
 
-    if len(trades_df) > 0:
-        settled = trades_df[trades_df["result"].isin(["success", "failure"])]
-        win_rate = float((settled["result"] == "success").mean()) if len(settled) > 0 else 0.0
-        avg_trade_ret = float(trades_df["ret"].mean())
-    else:
-        win_rate = 0.0
-        avg_trade_ret = 0.0
-
-    ending_equity = float(equity_df["equity"].iloc[-1]) if len(equity_df) > 0 else INITIAL_CAPITAL
+    win_rate = float(settled_win_count / settled_trade_count) if settled_trade_count > 0 else 0.0
+    avg_trade_ret = float(trade_ret_sum / closed_trade_count) if closed_trade_count > 0 else 0.0
     total_return = ending_equity / INITIAL_CAPITAL - 1.0
 
     summary = {
         "strategy": strategy_name,
-        "trades": int(len(trades_df)),
+        "trades": int(closed_trade_count),
         "win_rate": win_rate,
         "avg_trade_ret": avg_trade_ret,
         "total_return": total_return,
@@ -1124,43 +1341,151 @@ class TemplateCache:
         return templates
 
 
-def build_scored_df_normal(stage_records: List[Dict[str, Any]], templates: List[np.ndarray], cfg: BaseConfig) -> pd.DataFrame:
-    rows = []
-    for r in stage_records:
-        vec = get_rep_vector(r, cfg.seq_len, cfg.rep)
-        scored = score_candidate_vs_templates(vec, templates, cfg.scorer)
-        rows.append({
-            "code": r["code"],
-            "date": r["date"],
-            "label": r["label"],
-            "result": r["result"],
-            "ret": r["ret"],
-            "entry_date": r["entry_date"],
-            "exit_date": r["exit_date"],
-            "entry_price": r["entry_price"],
-            "score": scored["score"],
-            "aux1": scored["aux1"],
-            "aux2": scored["aux2"],
+class MatrixCache:
+    def __init__(self, stage_records: List[Dict[str, Any]], template_cache: TemplateCache, train_records: List[Dict[str, Any]]):
+        self.stage_records = stage_records
+        self.template_cache = template_cache
+        self.train_records = train_records
+        self._stage_rep: Dict[Tuple[int, str], np.ndarray] = {}
+        self._template_rep: Dict[Tuple[str, str, int, str], np.ndarray] = {}
 
-            "ret1": r["ret1"],
-            "ret5": r["ret5"],
-            "ret10": r["ret10"],
-            "signal_ret": r["signal_ret"],
-            "trend_spread": r["trend_spread"],
-            "close_to_trend": r["close_to_trend"],
-            "close_to_long": r["close_to_long"],
-            "ma10_slope_5": r["ma10_slope_5"],
-            "ma20_slope_5": r["ma20_slope_5"],
-            "brick_red_len": r["brick_red_len"],
-            "brick_green_len_prev": r["brick_green_len_prev"],
-            "rebound_ratio": r["rebound_ratio"],
-            "RSI14": r["RSI14"],
-            "MACD_hist": r["MACD_hist"],
-            "KDJ_J": r["KDJ_J"],
-            "body_ratio": r["body_ratio"],
-            "upper_shadow_pct": r["upper_shadow_pct"],
-            "lower_shadow_pct": r["lower_shadow_pct"],
-        })
+    def get_stage_mat(self, seq_len: int, rep: str) -> np.ndarray:
+        key = (seq_len, rep)
+        if key not in self._stage_rep:
+            self._stage_rep[key] = _stack_vectors([get_rep_vector(r, seq_len, rep) for r in self.stage_records])
+        return self._stage_rep[key]
+
+    def get_template_mat(self, label: str, builder: str, seq_len: int, rep: str) -> np.ndarray:
+        key = (label, builder, seq_len, rep)
+        if key not in self._template_rep:
+            templates = self.template_cache.get(self.train_records, label, builder, seq_len, rep)
+            self._template_rep[key] = _stack_vectors(templates)
+        return self._template_rep[key]
+
+
+def build_scored_df_normal(stage_records: List[Dict[str, Any]], templates: List[np.ndarray], cfg: BaseConfig, stage_mat: np.ndarray | None = None, template_mat: np.ndarray | None = None) -> pd.DataFrame:
+    rows = []
+    if stage_mat is None:
+        stage_mat = _stack_vectors([get_rep_vector(r, cfg.seq_len, cfg.rep) for r in stage_records])
+    if template_mat is None:
+        template_mat = _stack_vectors(templates)
+    fast_scorers = {"corr", "cosine", "euclidean", "paa", "wavelet", "fft"}
+
+    if cfg.scorer in fast_scorers:
+        max_scores, mean_scores, std_scores = batch_vector_scorer_stats(stage_mat, template_mat, cfg.scorer)
+        for i, r in enumerate(stage_records):
+            rows.append({
+                "code": r["code"],
+                "date": r["date"],
+                "label": r["label"],
+                "result": r["result"],
+                "ret": r["ret"],
+                "entry_date": r["entry_date"],
+                "exit_date": r["exit_date"],
+                "entry_price": r["entry_price"],
+                "score": float(max_scores[i]),
+                "aux1": float(mean_scores[i]),
+                "aux2": float(std_scores[i]),
+
+                "ret1": r["ret1"],
+                "ret5": r["ret5"],
+                "ret10": r["ret10"],
+                "signal_ret": r["signal_ret"],
+                "trend_spread": r["trend_spread"],
+                "close_to_trend": r["close_to_trend"],
+                "close_to_long": r["close_to_long"],
+                "ma10_slope_5": r["ma10_slope_5"],
+                "ma20_slope_5": r["ma20_slope_5"],
+                "brick_red_len": r["brick_red_len"],
+                "brick_green_len_prev": r["brick_green_len_prev"],
+                "rebound_ratio": r["rebound_ratio"],
+                "RSI14": r["RSI14"],
+                "MACD_hist": r["MACD_hist"],
+                "KDJ_J": r["KDJ_J"],
+                "body_ratio": r["body_ratio"],
+                "upper_shadow_pct": r["upper_shadow_pct"],
+                "lower_shadow_pct": r["lower_shadow_pct"],
+            })
+    elif cfg.scorer == "pipeline_corr_dtw":
+        top_idx, top_corr = batch_topk_indices_by_corr(stage_mat, template_mat, DTW_PIPELINE_TOPK)
+        for i, r in enumerate(stage_records):
+            vec = stage_mat[i]
+            if template_mat.size == 0 or top_idx.shape[1] == 0:
+                scored = {"score": -1.0, "aux1": -1.0, "aux2": 0.0}
+            else:
+                top_dtw = [dtw_sim(vec, template_mat[j]) for j in top_idx[i]]
+                max_corr = float(np.max(top_corr[i])) if len(top_corr[i]) else -1.0
+                max_dtw = float(np.max(top_dtw)) if top_dtw else -1.0
+                scored = {"score": 0.5 * max_corr + 0.5 * max_dtw, "aux1": max_corr, "aux2": max_dtw}
+
+            rows.append({
+                "code": r["code"],
+                "date": r["date"],
+                "label": r["label"],
+                "result": r["result"],
+                "ret": r["ret"],
+                "entry_date": r["entry_date"],
+                "exit_date": r["exit_date"],
+                "entry_price": r["entry_price"],
+                "score": scored["score"],
+                "aux1": scored["aux1"],
+                "aux2": scored["aux2"],
+
+                "ret1": r["ret1"],
+                "ret5": r["ret5"],
+                "ret10": r["ret10"],
+                "signal_ret": r["signal_ret"],
+                "trend_spread": r["trend_spread"],
+                "close_to_trend": r["close_to_trend"],
+                "close_to_long": r["close_to_long"],
+                "ma10_slope_5": r["ma10_slope_5"],
+                "ma20_slope_5": r["ma20_slope_5"],
+                "brick_red_len": r["brick_red_len"],
+                "brick_green_len_prev": r["brick_green_len_prev"],
+                "rebound_ratio": r["rebound_ratio"],
+                "RSI14": r["RSI14"],
+                "MACD_hist": r["MACD_hist"],
+                "KDJ_J": r["KDJ_J"],
+                "body_ratio": r["body_ratio"],
+                "upper_shadow_pct": r["upper_shadow_pct"],
+                "lower_shadow_pct": r["lower_shadow_pct"],
+            })
+    else:
+        for r in stage_records:
+            vec = get_rep_vector(r, cfg.seq_len, cfg.rep)
+            scored = score_candidate_vs_templates(vec, templates, cfg.scorer)
+            rows.append({
+                "code": r["code"],
+                "date": r["date"],
+                "label": r["label"],
+                "result": r["result"],
+                "ret": r["ret"],
+                "entry_date": r["entry_date"],
+                "exit_date": r["exit_date"],
+                "entry_price": r["entry_price"],
+                "score": scored["score"],
+                "aux1": scored["aux1"],
+                "aux2": scored["aux2"],
+
+                "ret1": r["ret1"],
+                "ret5": r["ret5"],
+                "ret10": r["ret10"],
+                "signal_ret": r["signal_ret"],
+                "trend_spread": r["trend_spread"],
+                "close_to_trend": r["close_to_trend"],
+                "close_to_long": r["close_to_long"],
+                "ma10_slope_5": r["ma10_slope_5"],
+                "ma20_slope_5": r["ma20_slope_5"],
+                "brick_red_len": r["brick_red_len"],
+                "brick_green_len_prev": r["brick_green_len_prev"],
+                "rebound_ratio": r["rebound_ratio"],
+                "RSI14": r["RSI14"],
+                "MACD_hist": r["MACD_hist"],
+                "KDJ_J": r["KDJ_J"],
+                "body_ratio": r["body_ratio"],
+                "upper_shadow_pct": r["upper_shadow_pct"],
+                "lower_shadow_pct": r["lower_shadow_pct"],
+            })
 
     df = pd.DataFrame(rows)
     if df.empty:
@@ -1184,13 +1509,68 @@ def build_scored_df_supervised(
     success_templates: List[np.ndarray],
     failure_templates: List[np.ndarray],
     cfg: BaseConfig,
+    stage_mat: np.ndarray | None = None,
+    succ_mat: np.ndarray | None = None,
+    fail_mat: np.ndarray | None = None,
 ) -> pd.DataFrame:
     train_sup_df = build_supervised_similarity_features(
         train_records, success_templates, failure_templates, cfg.seq_len, cfg.rep
     )
-    stage_sup_df = build_supervised_similarity_features(
-        stage_records, success_templates, failure_templates, cfg.seq_len, cfg.rep
-    )
+    if stage_mat is None or succ_mat is None or fail_mat is None:
+        stage_sup_df = build_supervised_similarity_features(
+            stage_records, success_templates, failure_templates, cfg.seq_len, cfg.rep
+        )
+    else:
+        rows = []
+        succ_max_corr, succ_mean_corr, _ = batch_corr_stats(stage_mat, succ_mat)
+        succ_max_euc, succ_mean_euc, _ = batch_euclidean_stats(stage_mat, succ_mat)
+        fail_max_corr, fail_mean_corr, _ = batch_corr_stats(stage_mat, fail_mat)
+        fail_max_euc, fail_mean_euc, _ = batch_euclidean_stats(stage_mat, fail_mat)
+
+        succ_top_idx, _ = batch_topk_indices_by_corr(stage_mat, succ_mat, DTW_SUPERVISED_TOPK)
+        fail_top_idx, _ = batch_topk_indices_by_corr(stage_mat, fail_mat, DTW_SUPERVISED_TOPK)
+
+        for i, r in enumerate(stage_records):
+            vec = stage_mat[i]
+            succ_dtws = [dtw_sim(vec, succ_mat[j]) for j in succ_top_idx[i]] if succ_mat.size > 0 and succ_top_idx.shape[1] > 0 else [0.0]
+            fail_dtws = [dtw_sim(vec, fail_mat[j]) for j in fail_top_idx[i]] if fail_mat.size > 0 and fail_top_idx.shape[1] > 0 else [0.0]
+            rows.append({
+                "code": r["code"],
+                "date": r["date"],
+                "label": r["label"],
+                "result": r["result"],
+                "ret": r["ret"],
+                "entry_date": r["entry_date"],
+                "exit_date": r["exit_date"],
+                "entry_price": r["entry_price"],
+                "succ_max_corr": float(succ_max_corr[i]),
+                "succ_mean_corr": float(succ_mean_corr[i]),
+                "succ_max_dtw": float(np.max(succ_dtws)),
+                "succ_mean_dtw": float(np.mean(succ_dtws)),
+                "succ_max_euc": float(succ_max_euc[i]),
+                "succ_mean_euc": float(succ_mean_euc[i]),
+                "fail_max_corr": float(fail_max_corr[i]),
+                "fail_mean_corr": float(fail_mean_corr[i]),
+                "fail_max_dtw": float(np.max(fail_dtws)),
+                "fail_mean_dtw": float(np.mean(fail_dtws)),
+                "fail_max_euc": float(fail_max_euc[i]),
+                "fail_mean_euc": float(fail_mean_euc[i]),
+                "ret1": r["ret1"],
+                "ret5": r["ret5"],
+                "trend_spread": r["trend_spread"],
+                "close_to_long": r["close_to_long"],
+                "brick_red_len": r["brick_red_len"],
+                "brick_green_len_prev": r["brick_green_len_prev"],
+                "signal_ret": r["signal_ret"],
+                "rebound_ratio": r["rebound_ratio"],
+                "RSI14": r["RSI14"],
+                "MACD_hist": r["MACD_hist"],
+                "KDJ_J": r["KDJ_J"],
+                "body_ratio": r["body_ratio"],
+                "upper_shadow_pct": r["upper_shadow_pct"],
+                "lower_shadow_pct": r["lower_shadow_pct"],
+            })
+        stage_sup_df = pd.DataFrame(rows).replace([np.inf, -np.inf], np.nan).fillna(0.0)
 
     model = train_supervised_similarity_model(train_sup_df)
     if model is None:
@@ -1206,44 +1586,90 @@ def build_base_scored_cache(
     stage_records: List[Dict[str, Any]],
     base_configs: List[BaseConfig],
     desc: str,
+    score_workers: int = 1,
 ) -> Dict[str, pd.DataFrame]:
     cache: Dict[str, pd.DataFrame] = {}
     template_cache = TemplateCache()
+    matrix_cache = MatrixCache(stage_records=stage_records, template_cache=template_cache, train_records=train_records)
 
-    iterator = tqdm(base_configs, total=len(base_configs), desc=desc, ncols=100)
-    for base_cfg in iterator:
+    for seq_len, rep in sorted({(cfg.seq_len, cfg.rep) for cfg in base_configs}):
+        matrix_cache.get_stage_mat(seq_len, rep)
+    for label, builder, seq_len, rep in sorted({
+        ("success", cfg.builder, cfg.seq_len, cfg.rep) for cfg in base_configs
+    } | {
+        ("failure", cfg.builder, cfg.seq_len, cfg.rep) for cfg in base_configs if cfg.scorer == "supervised_similarity"
+    }):
+        template_cache.get(train_records, label, builder, seq_len, rep)
+        matrix_cache.get_template_mat(label, builder, seq_len, rep)
+
+    def _score_one(base_cfg: BaseConfig) -> Tuple[str, pd.DataFrame]:
         key = base_cfg.key()
+        stage_mat = matrix_cache.get_stage_mat(base_cfg.seq_len, base_cfg.rep)
 
         if base_cfg.scorer == "supervised_similarity":
             success_templates = template_cache.get(train_records, "success", base_cfg.builder, base_cfg.seq_len, base_cfg.rep)
             failure_templates = template_cache.get(train_records, "failure", base_cfg.builder, base_cfg.seq_len, base_cfg.rep)
+            succ_mat = matrix_cache.get_template_mat("success", base_cfg.builder, base_cfg.seq_len, base_cfg.rep)
+            fail_mat = matrix_cache.get_template_mat("failure", base_cfg.builder, base_cfg.seq_len, base_cfg.rep)
             scored_df = build_scored_df_supervised(
                 train_records=train_records,
                 stage_records=stage_records,
                 success_templates=success_templates,
                 failure_templates=failure_templates,
                 cfg=base_cfg,
+                stage_mat=stage_mat,
+                succ_mat=succ_mat,
+                fail_mat=fail_mat,
             )
         else:
             templates = template_cache.get(train_records, "success", base_cfg.builder, base_cfg.seq_len, base_cfg.rep)
+            template_mat = matrix_cache.get_template_mat("success", base_cfg.builder, base_cfg.seq_len, base_cfg.rep)
             scored_df = build_scored_df_normal(
                 stage_records=stage_records,
                 templates=templates,
                 cfg=base_cfg,
+                stage_mat=stage_mat,
+                template_mat=template_mat,
             )
 
-        cache[key] = scored_df
+        return key, scored_df
+
+    if score_workers <= 1:
+        iterator = tqdm(base_configs, total=len(base_configs), desc=desc, ncols=100)
+        for base_cfg in iterator:
+            key, scored_df = _score_one(base_cfg)
+            cache[key] = scored_df
+        return cache
+
+    with ThreadPoolExecutor(max_workers=score_workers) as executor:
+        mapped = executor.map(_score_one, base_configs)
+        for key, scored_df in tqdm(mapped, total=len(base_configs), desc=desc, ncols=100):
+            cache[key] = scored_df
 
     return cache
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="BRICK relaxed 相似度 + 机器学习大组合实验")
+    parser.add_argument("--file-limit", type=int, default=0, help="只读取前 N 只股票做 smoke；0 表示全量")
+    parser.add_argument("--output-dir", type=str, default="", help="指定结果目录")
+    parser.add_argument("--max-workers", type=int, default=MAX_WORKERS, help="样本构建并行数")
+    parser.add_argument("--score-workers", type=int, default=4, help="基础打分线程数")
+    return parser.parse_args()
 
 
 # =========================
 # 主流程
 # =========================
 def main():
+    global OUTPUT_DIR
+    args = parse_args()
+    if args.output_dir:
+        OUTPUT_DIR = Path(args.output_dir)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     print(f"结果目录: {OUTPUT_DIR}")
 
-    all_records = load_full_signal_dataset()
+    all_records = load_full_signal_dataset(file_limit=args.file_limit, max_workers=args.max_workers)
     research_records, validation_records, final_test_records, meta = split_three_way(all_records)
 
     print("\n三段切分信息")
@@ -1277,20 +1703,43 @@ def main():
         stage_records=validation_records,
         base_configs=base_configs,
         desc="构建 validation 基础分数",
+        score_workers=args.score_workers,
     )
 
     # 2) 在 validation 上遍历 select/topN
     validation_summaries = []
     validation_ranked = []
+    validation_selection_cache = {
+        key: prepare_selection_frame(base_df, "score")
+        for key, base_df in validation_base_cache.items()
+    }
 
     for cfg in tqdm(strategy_pool, total=len(strategy_pool), desc="validation 参数评估", ncols=100):
-        base_df = validation_base_cache[cfg.base_config().key()]
-        selected = apply_selection_rules(base_df, cfg, "score")
-        _, _, summary = run_portfolio_backtest(selected, cfg.name(), "score")
+        prepared_df = validation_selection_cache[cfg.base_config().key()]
+        selected = apply_selection_rules(prepared_df, cfg, "score")
+        _, _, summary = run_portfolio_backtest(selected, cfg.name(), "score", return_details=False)
         validation_summaries.append(summary)
         validation_ranked.append((cfg, summary))
 
     validation_df = pd.DataFrame(validation_summaries).sort_values(
+        ["total_return", "max_drawdown", "win_rate"],
+        ascending=[False, False, False]
+    ).reset_index(drop=True)
+
+    # 对 validation 前若干名做完整明细回测，防止轻量 summary 排序异常。
+    fine_names = set(validation_df.head(min(VALIDATION_FINE_TOPK, len(validation_df)))["strategy"].tolist())
+    fine_summaries = []
+    fine_ranked = []
+    for cfg, _ in tqdm(validation_ranked, total=len(validation_ranked), desc="validation 精筛", ncols=100):
+        if cfg.name() not in fine_names:
+            continue
+        prepared_df = validation_selection_cache[cfg.base_config().key()]
+        selected = apply_selection_rules(prepared_df, cfg, "score")
+        _, _, summary = run_portfolio_backtest(selected, cfg.name(), "score", return_details=True)
+        fine_summaries.append(summary)
+        fine_ranked.append((cfg, summary))
+
+    validation_df = pd.DataFrame(fine_summaries).sort_values(
         ["total_return", "max_drawdown", "win_rate"],
         ascending=[False, False, False]
     ).reset_index(drop=True)
@@ -1301,7 +1750,7 @@ def main():
     # 3) 选 validation 冠军
     best_strategy_name = validation_df.iloc[0]["strategy"]
     best_cfg = None
-    for cfg, summary in validation_ranked:
+    for cfg, summary in fine_ranked:
         if summary["strategy"] == best_strategy_name:
             best_cfg = cfg
             break
@@ -1320,6 +1769,7 @@ def main():
         stage_records=final_test_records,
         base_configs=[best_base_cfg],
         desc="构建 final_test 基础分数",
+        score_workers=args.score_workers,
     )
 
     final_base_df = final_base_cache[best_base_cfg.key()]
