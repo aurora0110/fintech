@@ -9,6 +9,7 @@
 当前第一版入口是：
 
 - [runner.py](/Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/runner.py)
+- [brick_research_runner.py](/Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/brick_research_runner.py)
 
 现在它支持三种模式：
 1. `describe`
@@ -58,6 +59,20 @@ python3 /Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/runner.py \
 python3 /Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/runner.py \
   /Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/configs/brick_formal_best_pipeline_smoke.json \
   --mode backtest
+```
+
+跑 BRICK 综合实验 smoke：
+
+```bash
+python3 /Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/brick_research_runner.py \
+  /Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/configs/brick_comprehensive_lab_smoke.json
+```
+
+跑 BRICK 综合实验 full：
+
+```bash
+python3 /Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/brick_research_runner.py \
+  /Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/configs/brick_comprehensive_lab_full.json
 ```
 
 ## 配置结构
@@ -113,6 +128,11 @@ python3 /Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/runner.py \
 ### BRICK
 - `brick.main`
 - `brick.formal_best`
+- `brick.relaxed_base`
+- `brick.green4_enhance`
+- `brick.green4_low_enhance`
+- `brick.red4_filter`
+- `brick.green4_low_hardfilter`
 
 ## 当前内置确认因子
 
@@ -140,6 +160,11 @@ python3 /Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/runner.py \
 - `ranker.naive_bayes`
 - `ranker.reinforcement_learning`
 - `ranker.fusion`
+- `ranker.brick_similarity_champion`
+- `ranker.brick_factor_score`
+- `ranker.brick_similarity_plus_factor`
+- `ranker.brick_similarity_plus_ml`
+- `ranker.brick_full_fusion`
 
 ## 当前内置卖出模块
 
@@ -148,6 +173,12 @@ python3 /Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/runner.py \
 - `exit.model_plus_tp`
 - `exit.partial_tp`
 - `exit.brick_half_tp_then_green`
+- `exit.fixed_tp_grid`
+- `exit.partial_tp_grid`
+
+## 当前内置验证器
+
+- `validator.rolling_window`
 
 ## 当前原则
 
@@ -164,6 +195,14 @@ python3 /Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/runner.py \
 - `BRICK`
   - `brick.formal_best` 已迁入
   - 统一账户层 smoke 已能跑出真实交易和净值
+  - `brick_research_runner.py` 已覆盖：
+    - 纯相似度
+    - 相似度 + 因子
+    - 相似度 + ML
+    - 全融合
+    - `green4/low层` 候选池 AB
+    - 固定止盈 / 分批止盈网格
+    - 滚动验证
 - `B2 / B3 / 单针`
   - 已接入候选池模块
   - 其中部分仍是桥接旧 `check()` 或占位池，后续需要继续做深迁移

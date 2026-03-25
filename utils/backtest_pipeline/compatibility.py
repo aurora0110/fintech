@@ -117,11 +117,59 @@ FAMILY_MATRIX_SPECS: dict[str, dict[str, Any]] = {
             "brick.formal_best": {
                 "confirmers": [None],
                 "rankers": [{"name": "ranker.factor_discovery", "top_n_values": [10], "params": {"score_col": "base_score"}}],
+            },
+            "brick.relaxed_base": {
+                "confirmers": [None],
+                "rankers": [
+                    {"name": "ranker.brick_similarity_champion", "top_n_values": [8, 10, 12], "params": {"score_col": "sim_score"}},
+                    {"name": "ranker.brick_factor_score", "top_n_values": [8, 10, 12], "params": {"score_col": "factor_score"}},
+                    {"name": "ranker.brick_similarity_plus_factor", "top_n_values": [8, 10, 12], "params": {"score_col": "rank_score"}},
+                    {"name": "ranker.brick_similarity_plus_ml", "top_n_values": [8, 10, 12], "params": {"score_col": "rank_score"}},
+                    {"name": "ranker.brick_full_fusion", "top_n_values": [8, 10, 12], "params": {"score_col": "rank_score"}},
+                ],
+            },
+            "brick.green4_enhance": {
+                "confirmers": [None],
+                "rankers": [
+                    {"name": "ranker.brick_similarity_champion", "top_n_values": [8, 10, 12], "params": {"score_col": "sim_score"}},
+                    {"name": "ranker.brick_similarity_plus_factor", "top_n_values": [8, 10, 12], "params": {"score_col": "rank_score"}},
+                    {"name": "ranker.brick_similarity_plus_ml", "top_n_values": [8, 10, 12], "params": {"score_col": "rank_score"}},
+                    {"name": "ranker.brick_full_fusion", "top_n_values": [8, 10, 12], "params": {"score_col": "rank_score"}},
+                ],
+            },
+            "brick.green4_low_enhance": {
+                "confirmers": [None],
+                "rankers": [
+                    {"name": "ranker.brick_similarity_champion", "top_n_values": [8, 10, 12], "params": {"score_col": "sim_score"}},
+                    {"name": "ranker.brick_similarity_plus_factor", "top_n_values": [8, 10, 12], "params": {"score_col": "rank_score"}},
+                    {"name": "ranker.brick_similarity_plus_ml", "top_n_values": [8, 10, 12], "params": {"score_col": "rank_score"}},
+                    {"name": "ranker.brick_full_fusion", "top_n_values": [8, 10, 12], "params": {"score_col": "rank_score"}},
+                ],
+            },
+            "brick.red4_filter": {
+                "confirmers": [None],
+                "rankers": [
+                    {"name": "ranker.brick_similarity_champion", "top_n_values": [8, 10, 12], "params": {"score_col": "sim_score"}},
+                    {"name": "ranker.brick_similarity_plus_factor", "top_n_values": [8, 10, 12], "params": {"score_col": "rank_score"}},
+                    {"name": "ranker.brick_similarity_plus_ml", "top_n_values": [8, 10, 12], "params": {"score_col": "rank_score"}},
+                    {"name": "ranker.brick_full_fusion", "top_n_values": [8, 10, 12], "params": {"score_col": "rank_score"}},
+                ],
+            },
+            "brick.green4_low_hardfilter": {
+                "confirmers": [None],
+                "rankers": [
+                    {"name": "ranker.brick_similarity_champion", "top_n_values": [8, 10, 12], "params": {"score_col": "sim_score"}},
+                    {"name": "ranker.brick_similarity_plus_factor", "top_n_values": [8, 10, 12], "params": {"score_col": "rank_score"}},
+                    {"name": "ranker.brick_similarity_plus_ml", "top_n_values": [8, 10, 12], "params": {"score_col": "rank_score"}},
+                    {"name": "ranker.brick_full_fusion", "top_n_values": [8, 10, 12], "params": {"score_col": "rank_score"}},
+                ],
             }
         },
         "exits": _tp_variants([0.03, 0.1, 0.2, 0.3])
         + _model_plus_tp_variants(["xgb_score_v2"], [0.2, 0.3])
-        + [{"name": "exit.brick_half_tp_then_green", "params": {"first_take_profit_pct": 0.035}}],
+        + [{"name": "exit.brick_half_tp_then_green", "params": {"first_take_profit_pct": 0.035}}]
+        + [{"name": "exit.fixed_tp_grid", "params": {}}]
+        + [{"name": "exit.partial_tp_grid", "params": {}}],
     },
 }
 

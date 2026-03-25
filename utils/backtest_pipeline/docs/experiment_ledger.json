@@ -246,6 +246,62 @@
       },
       "conclusion": "仅对盈利仓启用 3.5% 半仓止盈后等转绿，明显优于“所有仓位都让剩余半仓等转绿”的版本，但仍未超过原 3%止盈+0.99止损+3天到期的 BRICK 正式冠军。",
       "result_dir": "/Users/lidongyang/Desktop/Qstrategy/results/brick_pipeline_half_tp_green_compare_v2_full_20260323"
+    },
+    {
+      "id": "brick-comprehensive-lab-brick_comprehensive_lab_smoke_20260325_r4",
+      "family": "brick",
+      "title": "BRICK 相似度/因子/机器学习/全融合综合实验",
+      "status": "completed",
+      "conclusion": "BRICK 综合实验当前总榜第一为 similarity_only|brick.green4_enhance|sample_300|len21|close_norm|cosine|gate0.80|top10，final_test total_return=0.6698。",
+      "result_dir": "/Users/lidongyang/Desktop/Qstrategy/results/brick_comprehensive_lab_smoke_20260325_r4"
+    },
+    {
+      "id": "brick-comprehensive-lab-brick_comprehensive_lab_smoke_20260325_r5",
+      "family": "brick",
+      "title": "BRICK 相似度/因子/机器学习/全融合综合实验",
+      "status": "completed",
+      "conclusion": "BRICK 综合实验当前总榜第一为 similarity_only|brick.green4_enhance|sample_300|len21|close_norm|cosine|gate0.80|top10，final_test total_return=0.6698。",
+      "result_dir": "/Users/lidongyang/Desktop/Qstrategy/results/brick_comprehensive_lab_smoke_20260325_r5"
+    },
+    {
+      "id": "brick-comprehensive-lab-brick_comprehensive_lab_debug_20260325_r1",
+      "family": "brick",
+      "title": "BRICK 相似度/因子/机器学习/全融合综合实验",
+      "status": "completed",
+      "conclusion": "BRICK 综合实验当前总榜第一为 similarity_plus_ml|brick.green4_low_enhance|sample_300|len21|close_norm|pipeline_corr_dtw|gate0.80|top10|xgboost，final_test total_return=0.1229。",
+      "result_dir": "/Users/lidongyang/Desktop/Qstrategy/results/brick_comprehensive_lab_debug_20260325_r1"
+    },
+    {
+      "id": "brick-comprehensive-lab-brick_comprehensive_lab_debug_20260325_r2",
+      "family": "brick",
+      "title": "BRICK 相似度/因子/机器学习/全融合综合实验",
+      "status": "completed",
+      "conclusion": "BRICK 综合实验当前总榜第一为 similarity_plus_ml|brick.green4_low_enhance|sample_300|len21|close_norm|pipeline_corr_dtw|gate0.80|top10|xgboost，final_test total_return=0.1229。",
+      "result_dir": "/Users/lidongyang/Desktop/Qstrategy/results/brick_comprehensive_lab_debug_20260325_r2"
+    },
+    {
+      "id": "brick-comprehensive-lab-brick_comprehensive_lab_smoke_20260325_r6",
+      "family": "brick",
+      "title": "BRICK 相似度/因子/机器学习/全融合综合实验",
+      "status": "completed",
+      "conclusion": "BRICK 综合实验当前总榜第一为 similarity_only|brick.green4_enhance|sample_300|len21|close_norm|cosine|gate0.80|top10，final_test total_return=0.6698。",
+      "result_dir": "/Users/lidongyang/Desktop/Qstrategy/results/brick_comprehensive_lab_smoke_20260325_r6"
+    },
+    {
+      "id": "brick-comprehensive-lab-brick_comprehensive_lab_smoke_20260325_r7",
+      "family": "brick",
+      "title": "BRICK 相似度/因子/机器学习/全融合综合实验",
+      "status": "completed",
+      "conclusion": "BRICK 综合实验当前总榜第一为 similarity_only|brick.green4_enhance|sample_300|len21|close_norm|cosine|gate0.80|top10，final_test total_return=0.6698。",
+      "result_dir": "/Users/lidongyang/Desktop/Qstrategy/results/brick_comprehensive_lab_smoke_20260325_r7"
+    },
+    {
+      "id": "brick-comprehensive-lab-brick_comprehensive_lab_full_20260325_r1",
+      "family": "brick",
+      "title": "BRICK 相似度/因子/机器学习/全融合综合实验",
+      "status": "completed",
+      "conclusion": "BRICK 综合实验当前总榜第一为 full_fusion|brick.relaxed_base|sample_300|len21|close_norm|pipeline_corr_dtw|gate0.80|top10|random_forest|w0.4_0.2_0.4，final_test total_return=2.9061。",
+      "result_dir": "/Users/lidongyang/Desktop/Qstrategy/results/brick_comprehensive_lab_full_20260325_r1"
     }
   ]
 }

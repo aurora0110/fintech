@@ -23,6 +23,7 @@
   - `RANKER_REGISTRY`
   - `EXIT_REGISTRY`
   - `ACCOUNT_POLICY_REGISTRY`
+  - `VALIDATOR_REGISTRY`
 
 ### [catalog.py](/Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/catalog.py)
 - 内置模块注册入口。
@@ -119,6 +120,18 @@
 ### [candidate_pools/brick.py](/Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/candidate_pools/brick.py)
 - `BrickMainPool`
 - `BrickFormalBestPool`
+- `BrickRelaxedBasePool`
+- `BrickGreen4EnhancePool`
+- `BrickGreen4LowEnhancePool`
+- `BrickRed4FilterPool`
+- `BrickGreen4LowHardFilterPool`
+- 当前状态：
+  - `brick.formal_best`：BRICK 正式冠军买点
+  - `brick.relaxed_base`：relaxed 样本宇宙
+  - `brick.green4_enhance`：`green4` 加分版
+  - `brick.green4_low_enhance`：`green4 + low层` 加分版
+  - `brick.red4_filter`：`red4` 扣分版
+  - `brick.green4_low_hardfilter`：`green4 + low层` 硬过滤版
 
 ## confirmers
 
@@ -160,6 +173,18 @@
 - `ReinforcementLearningRanker`
 - `FusionRanker`
 
+### [rankers/brick.py](/Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/rankers/brick.py)
+- `BrickSimilarityChampionRanker`
+- `BrickFactorScoreRanker`
+- `BrickSimilarityPlusFactorRanker`
+- `BrickSimilarityPlusMlRanker`
+- `BrickFullFusionRanker`
+- 这些模块用于 BRICK 综合实验：
+  - 纯相似度冠军
+  - 相似度 + 因子
+  - 相似度 + ML
+  - 全融合
+
 ## exits
 
 ### [exits/base.py](/Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/exits/base.py)
@@ -172,6 +197,13 @@
 - `PartialTakeProfitExit`
 - `BrickHalfTakeProfitThenGreenExit`
 
+### [exits/brick.py](/Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/exits/brick.py)
+- `BrickFixedTakeProfitGridExit`
+- `BrickPartialTakeProfitGridExit`
+- 用于 BRICK：
+  - 固定止盈网格
+  - 分批止盈网格
+
 ## portfolio
 
 ### [portfolio/base.py](/Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/portfolio/base.py)
@@ -180,6 +212,15 @@
 ### [portfolio/policies.py](/Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/portfolio/policies.py)
 - 当前内置：
   - `EQUAL_WEIGHT_POLICY`
+
+## validators
+
+### [validators/base.py](/Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/validators/base.py)
+- 滚动验证器基类
+
+### [validators/rolling.py](/Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/validators/rolling.py)
+- `RollingWindowValidator`
+- 用于 BRICK 综合实验的滚动窗口验证
 
 ## configs
 
@@ -201,6 +242,12 @@
 ### [configs/brick_formal_best_pipeline_smoke.json](/Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/configs/brick_formal_best_pipeline_smoke.json)
 - BRICK 历史正式最优策略小样本配置
 
+### [configs/brick_comprehensive_lab_smoke.json](/Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/configs/brick_comprehensive_lab_smoke.json)
+- BRICK 综合实验 smoke 配置
+
+### [configs/brick_comprehensive_lab_full.json](/Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/configs/brick_comprehensive_lab_full.json)
+- BRICK 综合实验 full 配置
+
 ## docs
 
 ### [docs/pipeline_design.md](/Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/docs/pipeline_design.md)
@@ -218,3 +265,20 @@
 ### [docs/experiment_ledger.json](/Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/docs/experiment_ledger.json)
 - 机器可读实验账本
 - 用于和实验矩阵精确比对
+
+## 专项 runner
+
+### [brick_research_runner.py](/Users/lidongyang/Desktop/Qstrategy/utils/backtest_pipeline/brick_research_runner.py)
+- BRICK 综合实验专用 runner
+- 输出：
+  - `candidate_scored.csv`
+  - `validation_summary.csv`
+  - `validation_top20.csv`
+  - `final_test_summary.csv`
+  - `best_config.json`
+  - `best_equity.csv`
+  - `best_trades.csv`
+  - `rolling_window_results.csv`
+  - `rolling_window_summary.csv`
+  - `comparison_to_baselines.csv`
+  - `summary.json`

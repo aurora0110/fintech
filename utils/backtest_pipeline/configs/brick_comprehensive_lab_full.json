@@ -1,0 +1,9 @@
+{
+  "name": "brick_comprehensive_lab_full",
+  "smoke": false,
+  "data_dir": "/Users/lidongyang/Desktop/Qstrategy/data",
+  "file_limit": 0,
+  "max_workers": 1,
+  "score_workers": 1,
+  "output_dir": "/Users/lidongyang/Desktop/Qstrategy/results/brick_comprehensive_lab_full_20260325_r1"
+}
