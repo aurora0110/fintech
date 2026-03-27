@@ -187,27 +187,38 @@ def sanitize_name(s: str) -> str:
 # =========================
 def load_stock_data(file_path: str) -> Optional[pd.DataFrame]:
     try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            lines = f.readlines()
+        lines = None
+        for encoding in ("utf-8", "gbk"):
+            try:
+                with open(file_path, "r", encoding=encoding, errors="ignore") as f:
+                    trial_lines = f.readlines()
+                if trial_lines:
+                    lines = trial_lines
+                    break
+            except Exception:
+                continue
 
-        if len(lines) < MIN_BARS + 1:
+        if not lines or len(lines) < MIN_BARS + 1:
             return None
 
         records = []
-        for line in lines[1:]:
+        for line in lines:
             parts = line.strip().split()
-            if len(parts) >= 7:
-                try:
-                    records.append({
-                        "date": parts[0],
-                        "open": float(parts[1]),
-                        "high": float(parts[2]),
-                        "low": float(parts[3]),
-                        "close": float(parts[4]),
-                        "volume": float(parts[5]),
-                    })
-                except ValueError:
-                    continue
+            if len(parts) < 7:
+                continue
+            if "/" not in parts[0] and "-" not in parts[0]:
+                continue
+            try:
+                records.append({
+                    "date": parts[0],
+                    "open": float(parts[1]),
+                    "high": float(parts[2]),
+                    "low": float(parts[3]),
+                    "close": float(parts[4]),
+                    "volume": float(parts[5]),
+                })
+            except ValueError:
+                continue
 
         if not records:
             return None
@@ -308,7 +319,7 @@ def compute_relaxed_brick_features(df: pd.DataFrame) -> pd.DataFrame:
     x["rebound_ratio"] = safe_div(x["brick_red_len"], x["brick_green_len"].shift(1), default=np.nan)
 
     x["pattern_a_relaxed"] = (
-        (x["prev_green_streak"] >= 3)
+        (x["prev_green_streak"] >= 1)
         & x["brick_red"]
     )
     x["pattern_b_relaxed"] = (

@@ -17,6 +17,7 @@ from utils.backtest_pipeline.candidate_pools.bridge_utils import scan_with_check
 BRICK_BASE_PATH = Path("/Users/lidongyang/Desktop/Qstrategy/utils/backtest/run_momentum_tail_experiment.py")
 BRICK_RANKING_PATH = Path("/Users/lidongyang/Desktop/Qstrategy/utils/backtest/compare_momentum_tail_ranking_models.py")
 BRICK_SIM_PATH = Path("/Users/lidongyang/Desktop/Qstrategy/utils/tmp/similarity_filter_research.py")
+CASE_SEMANTICS_PATH = Path("/Users/lidongyang/Desktop/Qstrategy/utils/tmp/brick_case_semantics_v1_20260326.py")
 TOP_N = 10
 PCT_RANK_THRESHOLD = 0.50
 
@@ -33,6 +34,7 @@ def _load_module(path: Path, module_name: str):
 brick_base = _load_module(BRICK_BASE_PATH, "brick_pipeline_base")
 brick_ranking = _load_module(BRICK_RANKING_PATH, "brick_pipeline_ranking")
 brick_similarity = _load_module(BRICK_SIM_PATH, "brick_similarity_pipeline")
+brick_case_semantics = _load_module(CASE_SEMANTICS_PATH, "brick_case_semantics_pipeline")
 _RELAXED_CANDIDATE_CACHE: Dict[Tuple[str, int], pd.DataFrame] = {}
 
 
@@ -181,6 +183,29 @@ def _build_relaxed_base_candidates(data_dir: str, file_limit: int = 0) -> pd.Dat
     out["trend_layer"] = np.where(out["trend_ok"], "high", "low")
     out["green4_low_flag"] = out["green4_flag"] & (out["trend_layer"] == "low")
     out["turn_strength_layer"] = _assign_turn_strength_layer(out)
+    semantic_rows = []
+    for row in out.itertuples(index=False):
+        semantic_rows.append(
+            brick_case_semantics.enrich_case_type_and_risk_from_values(
+                prev_green_streak=float(getattr(row, "prev_green_streak", 0.0) or 0.0),
+                prev_red_streak=float(getattr(row, "prev_red_streak", 0.0) or 0.0),
+                rebound_ratio=float(getattr(row, "rebound_ratio", 0.0) or 0.0),
+                signal_ret=float(getattr(row, "signal_ret", 0.0) or 0.0),
+                upper_shadow_pct=float(getattr(row, "upper_shadow_pct", 0.0) or 0.0),
+                body_ratio=float(getattr(row, "body_ratio", 0.0) or 0.0),
+                close_to_trend=float(getattr(row, "close_to_trend", 0.0) or 0.0),
+                close_to_long=float(getattr(row, "close_to_long", 0.0) or 0.0),
+            )
+        )
+    if semantic_rows:
+        semantic_df = pd.DataFrame(semantic_rows)
+        for col in semantic_df.columns:
+            out[col] = semantic_df[col].to_numpy()
+        out["pool_bonus"] = (
+            pd.to_numeric(out["pool_bonus"], errors="coerce").fillna(0.0)
+            + (pd.to_numeric(out["brick_case_type_score"], errors="coerce").fillna(0.45) - 0.45) * 0.12
+            + pd.to_numeric(out["early_red_stage_flag_num"], errors="coerce").fillna(0.0) * 0.04
+        )
     _RELAXED_CANDIDATE_CACHE[cache_key] = out.copy()
     return out
 
