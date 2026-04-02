@@ -1,6 +1,6 @@
 import time
 import yaml
-from utils import b1filter, b3filter, pinfilter, brick_filter, brickfilter_relaxed_fusion, holdprint, selectprint, stockDataValidator, stoploss, takeprofit, lgbm_p3_shallower_core10_daily_top9_filter, b1filter_similar_filter
+from utils import b1filter, b3filter, pinfilter, brick_filter, brickfilter_relaxed_fusion, brickfilter_case_rank_lgbm_top20, holdprint, selectprint, stockDataValidator, stoploss, takeprofit, lgbm_p3_shallower_core10_daily_top9_filter, b1filter_similar_filter
 from utils.strategy_feature_cache import StrategyFeatureCache
 from datetime import datetime
 from pathlib import Path
@@ -270,6 +270,7 @@ if __name__ == '__main__':
     pin_list = []
     brick_list = []
     brick_relaxed_fusion_list = []
+    brick_case_rank_lgbm_top20_list = []
     lgbm_final_list = []
     sell_list = []
 
@@ -319,6 +320,9 @@ if __name__ == '__main__':
     print("\n【BRICK relaxed_fusion 策略】")
     print(brickfilter_relaxed_fusion.strategy_description())
     print(brickfilter_relaxed_fusion.operation_suggestion())
+    print("\n【BRICK case_rank_lgbm_top20 策略】")
+    print(brickfilter_case_rank_lgbm_top20.strategy_description())
+    print(brickfilter_case_rank_lgbm_top20.operation_suggestion())
         
     result_map = {
         "sell_list": sell_list,
@@ -328,6 +332,7 @@ if __name__ == '__main__':
         "pin_list": pin_list,
         "brick_list": brick_list,
         "brick_relaxed_fusion_list": brick_relaxed_fusion_list,
+        "brick_case_rank_lgbm_top20_list": brick_case_rank_lgbm_top20_list,
         "lgbm_final_list": lgbm_final_list,
     }
     workers = int(os.environ.get("QSTRATEGY_MAIN_WORKERS", DEFAULT_SCAN_WORKERS))
@@ -372,8 +377,14 @@ if __name__ == '__main__':
         hold_list=hold_list,
         max_workers=workers,
     )
+    print("开始执行 BRICK case_rank_lgbm_top20 全市场排序...")
+    brick_case_rank_lgbm_top20_list = brickfilter_case_rank_lgbm_top20.scan_dir(
+        data_dir_after,
+        hold_list=hold_list,
+        max_workers=workers,
+    )
     lgbm_final_list.sort()
-    print("💡持有列表：", sell_list, '\n', "💡b1列表：", b1_list, '\n', "💡B1_SIM_ML列表：", b1_similar_ml_list, '\n', "💡b3列表：", b3_list, '\n', "💡单针列表：", pin_list, '\n', "💡brick列表：", brick_list, '\n', "💡BRICK_RELAXED_FUSION列表：", brick_relaxed_fusion_list, '\n', "💡LGBM_FINAL列表：", lgbm_final_list, '\n')
+    print("💡持有列表：", sell_list, '\n', "💡b1列表：", b1_list, '\n', "💡B1_SIM_ML列表：", b1_similar_ml_list, '\n', "💡b3列表：", b3_list, '\n', "💡单针列表：", pin_list, '\n', "💡brick列表：", brick_list, '\n', "💡BRICK_RELAXED_FUSION列表：", brick_relaxed_fusion_list, '\n', "💡BRICK_CASE_RANK_LGBM_TOP20列表：", brick_case_rank_lgbm_top20_list, '\n', "💡LGBM_FINAL列表：", lgbm_final_list, '\n')
     selectprint.show(sell_list, "持有")
     selectprint.show(b1_list, "B1")
     selectprint.show(b1_similar_ml_list, "B1_SIM_ML")
@@ -381,6 +392,7 @@ if __name__ == '__main__':
     selectprint.show(pin_list, "单针")
     selectprint.show(brick_list, "BRICK")
     selectprint.show(brick_relaxed_fusion_list, "BRICK_RELAXED_FUSION")
+    selectprint.show(brick_case_rank_lgbm_top20_list, "BRICK_CASE_RANK_LGBM_TOP20")
     selectprint.show(lgbm_final_list, "LGBM_FINAL")
 
     result_dir = "/Users/lidongyang/Desktop/Qstrategy/results"
@@ -397,6 +409,7 @@ if __name__ == '__main__':
             'pin_list': pin_list,
             'brick_list': brick_list,
             'brick_relaxed_fusion_list': brick_relaxed_fusion_list,
+            'brick_case_rank_lgbm_top20_list': brick_case_rank_lgbm_top20_list,
             'lgbm_final_list': lgbm_final_list,
             'hold_list': hold_list
         }, f, ensure_ascii=False, indent=2)

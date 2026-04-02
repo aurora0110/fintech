@@ -64,6 +64,24 @@ def show(input_list, type):
             close_p = format_price(close_price)
             print(f"股票代码{code:<6} | 止损价(参考)：{stop_p:<8} | 当日收盘价：{close_p:<10} | 综合分：{score} | 备注：{note}")
             continue
+
+        if type == "BRICK_CASE_RANK_LGBM_TOP20" and len(x) >= 5:
+            code = x[0]
+            stop_price = x[1]
+            close_price = x[2]
+            score = x[3]
+            note = x[4]
+
+            def format_price(price):
+                try:
+                    return f"{float(price):.1f}"
+                except (ValueError, TypeError):
+                    return price
+
+            stop_p = format_price(stop_price)
+            close_p = format_price(close_price)
+            print(f"股票代码{code:<6} | 止损参考：{stop_p:<8} | 当日收盘价：{close_p:<10} | 模型分：{score} | 备注：{note}")
+            continue
         
         # 3.1 处理 B1 相似度 + 因子 + ML 融合监控
         if type == "B1_SIM_ML" and len(x) >= 5:
