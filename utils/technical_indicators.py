@@ -219,9 +219,11 @@ def calculate_daily_ma(df, ma_periods=[5, 10, 20, 30, 60], price_col='收盘'):
     
     return df
 
-def caculate_pin(df, N1=3, N2=21):
+def caculate_pin(df, N1=3, N2=21, short_threshold=30, long_threshold=85):
     '''
-    计算单针下20、单针下35
+    计算单针：
+    - 短期：最近 N1 天位置偏低
+    - 长期：最近 N2 天位置仍偏高
     '''
     # 短期指标
     llv_l_n1 = df['最低'].rolling(window=N1).min()
@@ -233,8 +235,7 @@ def caculate_pin(df, N1=3, N2=21):
     hhv_l_n2 = df['收盘'].rolling(window=N2).max()
     df['长期'] = (df['收盘'] - llv_l_n2) / (hhv_l_n2 - llv_l_n2) * 100
 
-    # 单针下30
-    pin_label = df['短期'].iloc[-1] <= 30 and df['长期'].iloc[-1] >= 85
+    pin_label = df['短期'].iloc[-1] <= short_threshold and df['长期'].iloc[-1] >= long_threshold
     return pin_label
 
 

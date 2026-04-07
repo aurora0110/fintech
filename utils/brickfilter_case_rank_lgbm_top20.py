@@ -295,11 +295,11 @@ from pathlib import Path
 from typing import Any, Optional
 
 import pandas as pd
+from utils import project_paths
 
-
-ROOT = Path("/Users/lidongyang/Desktop/Qstrategy")
-PHASE0_BASE_SCRIPT = ROOT / "utils" / "brick_optimize" / "run_brick_case_rank_daily_stream_v1_20260328.py"
-SNAPSHOT_DATA_DIR = ROOT / "data" / "20260324"
+ROOT = project_paths.ROOT
+PHASE0_BASE_SCRIPT = project_paths.root_path("utils", "brick_optimize", "run_brick_case_rank_daily_stream_v1_20260328.py")
+SNAPSHOT_DATA_DIR = project_paths.data_path("20260324")
 
 STRATEGY_NAME = "BRICK_CASE_RANK_LGBM_TOP20"
 TOP_N = 20
@@ -422,12 +422,6 @@ def _normalize_scan_data_dir(data_dir: str | Path) -> Path:
 
 
 def _load_prebuilt_scored_for_date(target_date: pd.Timestamp, data_dir: str | Path) -> pd.DataFrame:
-    scan_data_dir = _normalize_scan_data_dir(data_dir)
-    try:
-        if scan_data_dir.resolve() != SNAPSHOT_DATA_DIR.resolve():
-            return pd.DataFrame()
-    except Exception:
-        return pd.DataFrame()
     prebuilt_daily_scored_csv = _resolve_phase0_result_dir() / "daily_scored_candidates.csv"
     if not prebuilt_daily_scored_csv.exists():
         return pd.DataFrame()
@@ -515,17 +509,19 @@ def scan_dir(
 ) -> list[list[str]]:
     del hold_list
 
-    target_date = _resolve_target_date(data_dir)
-    scored = _score_candidates_for_date(target_date=target_date, data_dir=data_dir, max_workers=max_workers)
-    if scored.empty:
-        return []
+    try:
+        target_date = _resolve_target_date(data_dir)
+        scored = _score_candidates_for_date(target_date=target_date, data_dir=data_dir, max_workers=max_workers)
+        if scored.empty:
+            return []
 
-    bundle = _load_runtime_bundle()
-    threshold = float(bundle["threshold"])
-    filtered = scored[pd.to_numeric(scored["model_score"], errors="coerce").fillna(-1.0) >= threshold].copy()
-    if filtered.empty:
+        bundle = _load_runtime_bundle()
+        threshold = float(bundle["threshold"])
+        filtered = scored[pd.to_numeric(scored["model_score"], errors="coerce").fillna(-1.0) >= threshold].copy()
+        if filtered.empty:
+            return []
+    except FileNotFoundError:
         return []
-
     filtered = filtered.sort_values(["model_score", "code"], ascending=[False, True]).head(TOP_N).reset_index(drop=True)
 
     out: list[list[str]] = []

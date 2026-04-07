@@ -82,14 +82,20 @@ from typing import Any, Optional
 import numpy as np
 import pandas as pd
 from pandas.tseries.offsets import DateOffset
+from utils import project_paths
 
-ROOT = Path("/Users/lidongyang/Desktop/Qstrategy")
-BEST_RESULT_DIR = ROOT / "results" / "brick_comprehensive_lab_full_20260325_r1"
-SIMILARITY_PATH = ROOT / "utils" / "tmp" / "similarity_filter_research.py"
-ROLLING_PATH = ROOT / "utils" / "tmp" / "run_brick_buypoint_rolling_compare_v1_20260326.py"
-CASE_SEMANTICS_PATH = ROOT / "utils" / "tmp" / "brick_case_semantics_v1_20260326.py"
-INPUT_DIR = ROOT / "data" / "20260324" / "normal"
-PERFECT_CASE_DIR = ROOT / "data" / "完美图" / "砖型图"
+ROOT = project_paths.ROOT
+BEST_RESULT_DIR = Path(
+    os.environ.get(
+        "QSTRATEGY_BRICK_RELAXED_FUSION_RESULT_DIR",
+        str(project_paths.results_path("brick_comprehensive_lab_full_20260325_r1")),
+    )
+)
+SIMILARITY_PATH = project_paths.root_path("utils", "tmp", "similarity_filter_research.py")
+ROLLING_PATH = project_paths.root_path("utils", "tmp", "run_brick_buypoint_rolling_compare_v1_20260326.py")
+CASE_SEMANTICS_PATH = project_paths.root_path("utils", "tmp", "brick_case_semantics_v1_20260326.py")
+INPUT_DIR = project_paths.data_path("20260324", "normal")
+PERFECT_CASE_DIR = project_paths.data_path("完美图", "砖型图")
 STRATEGY_NAME = "BRICKFILTER_RELAXED_FUSION"
 
 EXCLUDE_START = pd.Timestamp("2015-06-01")
@@ -158,6 +164,9 @@ def _load_best_and_history() -> tuple[dict[str, Any], pd.DataFrame]:
     if _HISTORICAL_CACHE is not None:
         best, df = _HISTORICAL_CACHE
         return best, df.copy()
+
+    if not (BEST_RESULT_DIR / "best_config.json").exists() or not (BEST_RESULT_DIR / "candidate_scored.csv").exists():
+        raise FileNotFoundError(f"缺少 relaxed_fusion 结果目录产物: {BEST_RESULT_DIR}")
 
     best = json.loads((BEST_RESULT_DIR / "best_config.json").read_text(encoding="utf-8"))
     df = pd.read_csv(
@@ -270,8 +279,8 @@ def _compute_signal_vs_ma5_proxy(x: pd.DataFrame) -> pd.Series:
     return pd.to_numeric(x["volume"], errors="coerce") / vol_prev_ma5.replace(0, np.nan)
 
 
-def _current_record_from_file(file_path_str: str) -> Optional[dict[str, Any]]:
-    df = sim.load_stock_data(file_path_str)
+def build_current_record(file_path_str: str, raw_df: Optional[pd.DataFrame] = None) -> Optional[dict[str, Any]]:
+    df = raw_df if raw_df is not None else sim.load_stock_data(file_path_str)
     if df is None or df.empty:
         return None
     x = sim.compute_relaxed_brick_features(df).reset_index(drop=True)
@@ -370,6 +379,10 @@ def _current_record_from_file(file_path_str: str) -> Optional[dict[str, Any]]:
     case_bonus = (float(record["brick_case_type_score"]) - 0.45) * 0.12 + float(record["early_red_stage_flag_num"]) * 0.04
     record["pool_bonus"] = case_bonus - risk_penalty
     return record
+
+
+def _current_record_from_file(file_path_str: str) -> Optional[dict[str, Any]]:
+    return build_current_record(file_path_str, raw_df=None)
 
 
 def _build_current_candidates(data_dir: str, file_limit: int = 0, max_workers: int = DEFAULT_MAX_WORKERS) -> pd.DataFrame:
@@ -617,18 +630,11 @@ def _format_output(df: pd.DataFrame) -> list[list[str]]:
     return out
 
 
-def scan_dir(
-    data_dir: str,
-    hold_list=None,
-    file_limit: int = 0,
-    max_workers: int = DEFAULT_MAX_WORKERS,
-) -> list[list[str]]:
-    del hold_list
-    best, hist_df = _load_best_and_history()
-    current_df = _build_current_candidates(data_dir, file_limit=file_limit, max_workers=max_workers)
-    if current_df.empty:
+def rank_current_candidates(current_df: pd.DataFrame, data_dir: str) -> list[list[str]]:
+    if current_df is None or current_df.empty:
         return []
 
+    best, hist_df = _load_best_and_history()
     latest_signal_date = pd.Timestamp(current_df["signal_date"].max())
     current_df = current_df[current_df["signal_date"] == latest_signal_date].copy().reset_index(drop=True)
 
@@ -709,6 +715,20 @@ def scan_dir(
         .reset_index(drop=True)
     )
     return _format_output(selected)
+
+
+def scan_dir(
+    data_dir: str,
+    hold_list=None,
+    file_limit: int = 0,
+    max_workers: int = DEFAULT_MAX_WORKERS,
+) -> list[list[str]]:
+    del hold_list
+    try:
+        current_df = _build_current_candidates(data_dir, file_limit=file_limit, max_workers=max_workers)
+        return rank_current_candidates(current_df, data_dir)
+    except FileNotFoundError:
+        return []
 
 
 def print_selected(selected: list[list[str]]) -> None:

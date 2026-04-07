@@ -7,9 +7,10 @@ from typing import Dict, List, Optional
 import numpy as np
 import pandas as pd
 from utils.market_risk_tags import add_risk_features, format_risk_note, latest_risk_snapshot
+from utils import project_paths
 
 
-INPUT_DIR = Path("/Users/lidongyang/Desktop/Qstrategy/data/20260226/normal")
+INPUT_DIR = project_paths.data_path("20260226", "normal")
 MIN_BARS = 160
 EPS = 1e-12
 TOP_N = 10
@@ -117,7 +118,7 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
 
     x["vol_ma5_prev"] = x["volume"].shift(1).rolling(5).mean()
     x["signal_vs_ma5"] = safe_div(x["volume"], x["vol_ma5_prev"])
-    x["signal_vs_ma5_valid"] = x["signal_vs_ma5"].between(1, 2.2, inclusive="both")
+    x["signal_vs_ma5_valid"] = x["signal_vs_ma5"].between(0.8, 2.2, inclusive="both")
 
     hhv4 = x["high"].rolling(4).max()
     llv4 = x["low"].rolling(4).min()

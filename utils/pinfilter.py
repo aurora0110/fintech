@@ -320,13 +320,11 @@ def build_recommendation_order(matched_subtypes):
 
 def check(file_path, feature_cache=None):
     """
-    当前单针优化版买点：
-    1. 趋势线 > 多空线
-    2. 满足单针定义：长期 >= 85，短期 <= 30
-    3. 允许三类单针：
-       A. 缩量回踩型
-       B. 强趋势加速型
-       C. 结构支撑型（沿趋势/N型/关键K支撑）
+    当前单针简化版买点：
+    1. 保持周线条件
+    2. 趋势线 > 多空线
+    3. 满足单针定义：长期 >= 85，短期 <= 30
+    4. 当日成交量 < 5日均量
     """
     if feature_cache is not None:
         weekly_ok, weekly_reason = feature_cache.weekly_screen()
@@ -350,14 +348,15 @@ def check(file_path, feature_cache=None):
     if feat["trend_line"] <= feat["long_line"]:
         return [-1]
 
-    if not technical_indicators.caculate_pin(df):
+    if not technical_indicators.caculate_pin(df, short_threshold=30, long_threshold=85):
         return [-1]
 
-    matched_subtypes = detect_subtypes(feat)
-    if not matched_subtypes:
+    vol_ma5 = pd.to_numeric(df["成交量"], errors="coerce").rolling(5, min_periods=5).mean().iloc[-1]
+    today_vol = float(pd.to_numeric(df["成交量"], errors="coerce").iloc[-1])
+    if not np.isfinite(vol_ma5) or not np.isfinite(today_vol) or not (today_vol < vol_ma5):
         return [-1]
 
-    daily_reason = "+".join(matched_subtypes)
+    daily_reason = "周线通过+趋势线强于多空线+单针(长期>=85且短期<=30)+当日量小于5日均量"
     risk_note = format_risk_note(feature_cache.risk_snapshot()) if feature_cache is not None else ""
     note = f"周线：{weekly_reason} | 日线：{daily_reason}"
     if risk_note:
@@ -365,6 +364,6 @@ def check(file_path, feature_cache=None):
     return [
         1,
         daily_reason,
-        build_recommendation_order(matched_subtypes),
+        "固定条件版",
         note,
     ]

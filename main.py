@@ -1,6 +1,7 @@
 import time
 import yaml
-from utils import b1filter, b3filter, pinfilter, brick_filter, brickfilter_relaxed_fusion, brickfilter_case_rank_lgbm_top20, holdprint, selectprint, stockDataValidator, stoploss, takeprofit, lgbm_p3_shallower_core10_daily_top9_filter, b1filter_similar_filter
+from utils import b3filter, pinfilter, brick_filter, brickfilter_relaxed_fusion, brickfilter_case_rank_lgbm_top20, holdprint, selectprint, stockDataValidator, stoploss, takeprofit
+from utils import project_paths
 from utils.strategy_feature_cache import StrategyFeatureCache
 from datetime import datetime
 from pathlib import Path
@@ -19,23 +20,25 @@ _WORKER_HOLD_CODE_SET = None
 def find_latest_available_data_dir(root_dir: str, today_str: str) -> Tuple[Optional[str], Optional[str]]:
     root = Path(root_dir)
     candidates = []
-    for normal_dir in root.glob("20*/normal"):
-        if not normal_dir.is_dir():
+    for date_dir in root.glob("20*"):
+        if not date_dir.is_dir():
             continue
-        txt_count = len(list(normal_dir.glob("*.txt")))
-        if txt_count == 0:
+        date_str = date_dir.name
+        raw_txt_count = len(list(date_dir.glob("*.txt")))
+        normal_dir = date_dir / "normal"
+        normal_txt_count = len(list(normal_dir.glob("*.txt"))) if normal_dir.is_dir() else 0
+        if raw_txt_count == 0 and normal_txt_count == 0:
             continue
-        date_str = normal_dir.parent.name
-        candidates.append((date_str, str(normal_dir)))
+        candidates.append((date_str, str(date_dir)))
 
     if not candidates:
         return None, None
 
     candidates.sort(key=lambda x: x[0])
     if today_str:
-        for date_str, normal_dir in reversed(candidates):
+        for date_str, date_dir in reversed(candidates):
             if date_str <= today_str:
-                return date_str, normal_dir
+                return date_str, date_dir
     return candidates[-1]
 
 
@@ -60,7 +63,7 @@ def _scan_one_file(file_path_str: str):
         "b3_list": [],
         "pin_list": [],
         "brick_list": [],
-        "lgbm_final_list": [],
+        "brick_relaxed_candidate_rows": [],
     }
 
     if file_name in hold_code_set:
@@ -71,34 +74,8 @@ def _scan_one_file(file_path_str: str):
         if takeprofit_result[0] == 1:
             result["sell_list"].append([file_name, takeprofit_result[1]])
 
-    b1_result = b1filter.check(str(file_path), hold_list, feature_cache=feature_cache)
-    if b1_result[0] == 1:
-        result["b1_list"].append([
-            file_name,
-            str(round(float(b1_result[1]), 2)),
-            str(round(float(b1_result[2]), 2)),
-            str(b1_result[3]),
-            str(b1_result[4]),
-        ])
-
-    try:
-        b1_similar_ml_result = b1filter_similar_filter.check(
-            str(file_path),
-            hold_list,
-            feature_cache=feature_cache,
-        )
-        if b1_similar_ml_result[0] == 1:
-            result["b1_similar_ml_candidates"].append(
-                {
-                    "code": file_name,
-                    "stop_loss_price": float(b1_similar_ml_result[1]),
-                    "close_price": float(b1_similar_ml_result[2]),
-                    "score": float(b1_similar_ml_result[3]),
-                    "note": str(b1_similar_ml_result[4]),
-                }
-            )
-    except Exception:
-        pass
+    # B1 及其相似ML分支按当前需求停用。
+    # main.py 中没有独立 B2 输出块；B3 内部仍会复用 b2 特征，但这不属于单独的 B2 筛选。
 
     b3_result = b3filter.check(str(file_path), hold_list, feature_cache=feature_cache)
     if b3_result[0] == 1:
@@ -126,15 +103,15 @@ def _scan_one_file(file_path_str: str):
             str(brick_result[4]),
         ])
 
-    lgbm_result = lgbm_p3_shallower_core10_daily_top9_filter.check(str(file_path), hold_list)
-    if lgbm_result[0] == 1:
-        result["lgbm_final_list"].append([
-            file_name,
-            str(round(lgbm_result[1], 2)),
-            str(round(lgbm_result[2], 2)),
-            str(lgbm_result[3]),
-            str(lgbm_result[4]),
-        ])
+    try:
+        relaxed_record = brickfilter_relaxed_fusion.build_current_record(
+            str(file_path),
+            raw_df=feature_cache.raw_df(),
+        )
+        if relaxed_record is not None:
+            result["brick_relaxed_candidate_rows"].append(relaxed_record)
+    except Exception:
+        pass
 
     return result
 
@@ -155,6 +132,10 @@ def _save_holding_yaml(path: str, data: dict) -> None:
 
 
 def _interactive_hold_management(hold_list: list, hold_path: str) -> list:
+    if os.environ.get("QSTRATEGY_NON_INTERACTIVE", "").strip() == "1" or not os.isatty(0):
+        print("非交互模式：跳过持仓管理。")
+        return hold_list
+
     print("\n" + "=" * 80)
     print("【持仓管理】")
     print("  增加持仓: add CODE STOP PROFIT TYPE NOTE | CODE2 STOP2 PROFIT2 TYPE2 NOTE2 ...")
@@ -265,25 +246,24 @@ def _interactive_hold_management(hold_list: list, hold_path: str) -> list:
 if __name__ == '__main__':
     start_time = time.time()
     b1_list = []
-    b1_similar_ml_list = []
     b3_list = []
     pin_list = []
     brick_list = []
     brick_relaxed_fusion_list = []
     brick_case_rank_lgbm_top20_list = []
-    lgbm_final_list = []
     sell_list = []
+    b1_similar_ml_list = []
 
     today_str = datetime.today().strftime("%Y%m%d")
     print("今天的日期:", today_str)
 
-    hold_path = "/Users/lidongyang/Desktop/Qstrategy/config/holding.yaml"
+    hold_path = str(project_paths.config_path("holding.yaml"))
     hold_list = holdprint.show(hold_path)
     hold_list = _interactive_hold_management(hold_list, hold_path)
     hold_code_set = {str(item[0]) for item in hold_list}
 
-    data_dir_before = "/Users/lidongyang/Desktop/Qstrategy/data/" + today_str
-    data_dir_after = "/Users/lidongyang/Desktop/Qstrategy/data/" + today_str + "/normal"
+    data_dir_before = str(project_paths.data_path(today_str))
+    data_dir_after = str(project_paths.data_path(today_str, "normal"))
     if not Path(data_dir_before).exists():
         Path(data_dir_before).mkdir(parents=True, exist_ok=True)
     if not Path(data_dir_after).exists():
@@ -298,25 +278,22 @@ if __name__ == '__main__':
             print(f"{today_str} 原始目录有数据，但校验后 normal 中没有通过文件")
             raise SystemExit(0)
     else:
-        fallback_date_str, fallback_normal_dir = find_latest_available_data_dir(
-            "/Users/lidongyang/Desktop/Qstrategy/data",
+        fallback_date_str, fallback_data_dir = find_latest_available_data_dir(
+            str(project_paths.DATA_DIR),
             today_str,
         )
-        if fallback_normal_dir is None:
+        if fallback_data_dir is None:
             print("未找到任何txt文件")
             stockDataValidator.main(data_dir_before)
             raise SystemExit(0)
 
         print(f"今日目录无原始数据，回退到最近有数据的交易日：{fallback_date_str}")
-        data_dir_after = fallback_normal_dir
-        data_dir_before = str(Path(fallback_normal_dir).parent)
+        data_dir_before = fallback_data_dir
         stockDataValidator.main(data_dir_before)
+        data_dir_after = str(Path(data_dir_before) / "normal")
         file_paths = list(Path(data_dir_after).glob('*.txt'))
 
     print(f"实际扫描日期：{fallback_date_str}")
-    print("\n【B1 相似度冠军策略】")
-    print(b1filter_similar_filter.strategy_description())
-    print(b1filter_similar_filter.operation_suggestion())
     print("\n【BRICK relaxed_fusion 策略】")
     print(brickfilter_relaxed_fusion.strategy_description())
     print(brickfilter_relaxed_fusion.operation_suggestion())
@@ -331,9 +308,9 @@ if __name__ == '__main__':
         "b3_list": b3_list,
         "pin_list": pin_list,
         "brick_list": brick_list,
+        "brick_relaxed_candidate_rows": [],
         "brick_relaxed_fusion_list": brick_relaxed_fusion_list,
         "brick_case_rank_lgbm_top20_list": brick_case_rank_lgbm_top20_list,
-        "lgbm_final_list": lgbm_final_list,
     }
     workers = int(os.environ.get("QSTRATEGY_MAIN_WORKERS", DEFAULT_SCAN_WORKERS))
     print(f"主流程并行进程数：{workers}")
@@ -353,49 +330,41 @@ if __name__ == '__main__':
                 print(f"主流程扫描进度: {completed}/{total}")
 
     sell_list.sort()
-    b1_list.sort()
-    b1_similar_ml_candidates = sorted(
-        result_map["b1_similar_ml_candidates"],
-        key=lambda item: (-float(item["score"]), str(item["code"])),
-    )
-    for item in b1_similar_ml_candidates[:3]:
-        b1_similar_ml_list.append(
-            [
-                item["code"],
-                str(round(float(item["stop_loss_price"]), 2)),
-                str(round(float(item["close_price"]), 2)),
-                str(round(float(item["score"]), 4)),
-                item["note"],
-            ]
-        )
     b3_list.sort()
     pin_list.sort()
     brick_list.sort()
-    print("开始执行 BRICK relaxed_fusion 全市场二次排序...")
-    brick_relaxed_fusion_list = brickfilter_relaxed_fusion.scan_dir(
-        data_dir_after,
-        hold_list=hold_list,
-        max_workers=workers,
-    )
+    print("开始执行 BRICK relaxed_fusion 候选排序...")
+    relaxed_candidate_rows = result_map["brick_relaxed_candidate_rows"]
+    if relaxed_candidate_rows:
+        try:
+            brick_relaxed_fusion_list = brickfilter_relaxed_fusion.rank_current_candidates(
+                current_df=brickfilter_relaxed_fusion.pd.DataFrame(relaxed_candidate_rows),
+                data_dir=data_dir_after,
+            )
+        except Exception as exc:
+            print(f"BRICK relaxed_fusion 跳过：{exc}")
+            brick_relaxed_fusion_list = []
+    else:
+        brick_relaxed_fusion_list = []
     print("开始执行 BRICK case_rank_lgbm_top20 全市场排序...")
-    brick_case_rank_lgbm_top20_list = brickfilter_case_rank_lgbm_top20.scan_dir(
-        data_dir_after,
-        hold_list=hold_list,
-        max_workers=workers,
-    )
-    lgbm_final_list.sort()
-    print("💡持有列表：", sell_list, '\n', "💡b1列表：", b1_list, '\n', "💡B1_SIM_ML列表：", b1_similar_ml_list, '\n', "💡b3列表：", b3_list, '\n', "💡单针列表：", pin_list, '\n', "💡brick列表：", brick_list, '\n', "💡BRICK_RELAXED_FUSION列表：", brick_relaxed_fusion_list, '\n', "💡BRICK_CASE_RANK_LGBM_TOP20列表：", brick_case_rank_lgbm_top20_list, '\n', "💡LGBM_FINAL列表：", lgbm_final_list, '\n')
+    try:
+        brick_case_rank_lgbm_top20_list = brickfilter_case_rank_lgbm_top20.scan_dir(
+            data_dir_after,
+            hold_list=hold_list,
+            max_workers=workers,
+        )
+    except Exception as exc:
+        print(f"BRICK case_rank_lgbm_top20 跳过：{exc}")
+        brick_case_rank_lgbm_top20_list = []
+    print("💡持有列表：", sell_list, '\n', "💡b3列表：", b3_list, '\n', "💡单针列表：", pin_list, '\n', "💡brick列表：", brick_list, '\n', "💡BRICK_RELAXED_FUSION列表：", brick_relaxed_fusion_list, '\n', "💡BRICK_CASE_RANK_LGBM_TOP20列表：", brick_case_rank_lgbm_top20_list, '\n')
     selectprint.show(sell_list, "持有")
-    selectprint.show(b1_list, "B1")
-    selectprint.show(b1_similar_ml_list, "B1_SIM_ML")
     selectprint.show(b3_list, "B3")
     selectprint.show(pin_list, "单针")
     selectprint.show(brick_list, "BRICK")
     selectprint.show(brick_relaxed_fusion_list, "BRICK_RELAXED_FUSION")
     selectprint.show(brick_case_rank_lgbm_top20_list, "BRICK_CASE_RANK_LGBM_TOP20")
-    selectprint.show(lgbm_final_list, "LGBM_FINAL")
 
-    result_dir = "/Users/lidongyang/Desktop/Qstrategy/results"
+    result_dir = str(project_paths.RESULTS_DIR)
     if not os.path.exists(result_dir):
         os.makedirs(result_dir)
     
@@ -410,7 +379,6 @@ if __name__ == '__main__':
             'brick_list': brick_list,
             'brick_relaxed_fusion_list': brick_relaxed_fusion_list,
             'brick_case_rank_lgbm_top20_list': brick_case_rank_lgbm_top20_list,
-            'lgbm_final_list': lgbm_final_list,
             'hold_list': hold_list
         }, f, ensure_ascii=False, indent=2)
     
