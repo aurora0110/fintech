@@ -15,6 +15,7 @@ EPS = 1e-12
 B3_RET1_MAX = 0.02
 B3_AMPLITUDE_MAX = 0.05
 B3_VOL_SHRINK_MAX = 1.0
+B3_VOL_VS_MA5_MAX = 1.0
 B3_PREV_B1_J_MAX = 13.0
 
 
@@ -61,25 +62,33 @@ def add_features(df: pd.DataFrame, precomputed_b2: Optional[pd.DataFrame] = None
     x["daily_b1_signal"] = b1_flags["daily_b1_signal"]
     x["daily_b1_reason"] = b1_flags["daily_b1_reason"]
 
-    x["bull_close"] = x["close"] > x["open"]
+    x["bull_close"] = x["close"] > x["close"].shift(1)
     x["amplitude"] = pd.Series(safe_div(x["high"] - x["low"], x["low"]), index=x.index)
     x["vol_vs_prev"] = pd.Series(safe_div(x["volume"], x["volume"].shift(1)), index=x.index)
+    x["vol_ma5"] = x["volume"].rolling(5).mean()
+    x["vol_vs_ma5"] = pd.Series(safe_div(x["volume"], x["vol_ma5"]), index=x.index)
     x["vol_shrink"] = x["vol_vs_prev"] < B3_VOL_SHRINK_MAX
+    x["vol_shrink_ma5"] = x["vol_vs_ma5"] < B3_VOL_VS_MA5_MAX
+    x["close_above_long"] = x["close"] > x["long_line"]
 
     x["prev_b2_any"] = x["b2_signal"].shift(1).fillna(False)
 
     x["b3_signal"] = (
         x["prev_b2_any"]
         & x["bull_close"]
+        & x["close_above_long"]
         & (x["ret1"] < B3_RET1_MAX)
         & (x["amplitude"] < B3_AMPLITUDE_MAX)
         & x["vol_shrink"]
+        & x["vol_shrink_ma5"]
     )
 
     prev_score = x["sort_score"].shift(1).fillna(0.0)
     ret_quality = (1.0 - np.minimum(np.abs(x["ret1"].fillna(1.0)) / B3_RET1_MAX, 1.0)).clip(lower=0.0)
     amp_quality = (1.0 - np.minimum(x["amplitude"].fillna(1.0) / B3_AMPLITUDE_MAX, 1.0)).clip(lower=0.0)
-    shrink_quality = (1.0 - np.minimum(np.maximum(x["vol_vs_prev"].fillna(10.0) - 0.70, 0.0) / 0.30, 1.0)).clip(lower=0.0)
+    shrink_prev_quality = (1.0 - np.minimum(np.maximum(x["vol_vs_prev"].fillna(10.0) - 0.70, 0.0) / 0.30, 1.0)).clip(lower=0.0)
+    shrink_ma5_quality = (1.0 - np.minimum(np.maximum(x["vol_vs_ma5"].fillna(10.0) - 0.70, 0.0) / 0.30, 1.0)).clip(lower=0.0)
+    shrink_quality = 0.5 * shrink_prev_quality + 0.5 * shrink_ma5_quality
     x["b3_score"] = (
         0.45 * prev_score
         + 0.20 * ret_quality

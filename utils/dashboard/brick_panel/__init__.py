@@ -1,0 +1,1 @@
+"""BRICK strategy dashboard package."""

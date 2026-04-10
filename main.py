@@ -1,6 +1,6 @@
 import time
 import yaml
-from utils import b3filter, pinfilter, brick_filter, brickfilter_relaxed_fusion, brickfilter_case_rank_lgbm_top20, holdprint, selectprint, stockDataValidator, stoploss, takeprofit
+from utils import b3filter, pinfilter, brick_filter, brickfilter_case_rank_lgbm_top20, holdprint, selectprint, stockDataValidator, stoploss, takeprofit
 from utils import project_paths
 from utils.strategy_feature_cache import StrategyFeatureCache
 from datetime import datetime
@@ -63,7 +63,6 @@ def _scan_one_file(file_path_str: str):
         "b3_list": [],
         "pin_list": [],
         "brick_list": [],
-        "brick_relaxed_candidate_rows": [],
     }
 
     if file_name in hold_code_set:
@@ -102,16 +101,6 @@ def _scan_one_file(file_path_str: str):
             str(brick_result[3]),
             str(brick_result[4]),
         ])
-
-    try:
-        relaxed_record = brickfilter_relaxed_fusion.build_current_record(
-            str(file_path),
-            raw_df=feature_cache.raw_df(),
-        )
-        if relaxed_record is not None:
-            result["brick_relaxed_candidate_rows"].append(relaxed_record)
-    except Exception:
-        pass
 
     return result
 
@@ -243,6 +232,50 @@ def _interactive_hold_management(hold_list: list, hold_path: str) -> list:
     return new_hold_list
 
 
+def _read_stock_name(file_path: str) -> str:
+    for encoding in ("gbk", "gb2312", "utf-8", "latin-1"):
+        try:
+            with open(file_path, "r", encoding=encoding, errors="ignore") as f:
+                first_line = f.readline().strip()
+            break
+        except Exception:
+            first_line = ""
+    else:
+        first_line = ""
+
+    if not first_line:
+        return ""
+    parts = first_line.split()
+    if len(parts) >= 2:
+        return parts[1].strip()
+    chinese_chars = "".join([c for c in first_line if "\u4e00" <= c <= "\u9fff"])
+    return chinese_chars.strip()
+
+
+def _build_code_name_map(file_paths) -> dict[str, str]:
+    code_name_map: dict[str, str] = {}
+    for file_path in file_paths:
+        file_path = Path(file_path)
+        code = file_path.stem.split("#")[-1]
+        if code in code_name_map:
+            continue
+        stock_name = _read_stock_name(str(file_path))
+        code_name_map[code] = stock_name or code
+    return code_name_map
+
+
+def _format_named_list(items, code_name_map):
+    formatted = []
+    for item in items:
+        if not item:
+            formatted.append(item)
+            continue
+        code = str(item[0])
+        stock_name = code_name_map.get(code, code)
+        formatted.append([code, stock_name, *item[1:]])
+    return formatted
+
+
 if __name__ == '__main__':
     start_time = time.time()
     b1_list = []
@@ -254,7 +287,7 @@ if __name__ == '__main__':
     sell_list = []
     b1_similar_ml_list = []
 
-    today_str = datetime.today().strftime("%Y%m%d")
+    today_str = os.environ.get("QSTRATEGY_TODAY_OVERRIDE", "").strip() or datetime.today().strftime("%Y%m%d")
     print("今天的日期:", today_str)
 
     hold_path = str(project_paths.config_path("holding.yaml"))
@@ -294,12 +327,10 @@ if __name__ == '__main__':
         file_paths = list(Path(data_dir_after).glob('*.txt'))
 
     print(f"实际扫描日期：{fallback_date_str}")
-    print("\n【BRICK relaxed_fusion 策略】")
-    print(brickfilter_relaxed_fusion.strategy_description())
-    print(brickfilter_relaxed_fusion.operation_suggestion())
     print("\n【BRICK case_rank_lgbm_top20 策略】")
     print(brickfilter_case_rank_lgbm_top20.strategy_description())
     print(brickfilter_case_rank_lgbm_top20.operation_suggestion())
+    code_name_map = _build_code_name_map(file_paths)
         
     result_map = {
         "sell_list": sell_list,
@@ -308,8 +339,6 @@ if __name__ == '__main__':
         "b3_list": b3_list,
         "pin_list": pin_list,
         "brick_list": brick_list,
-        "brick_relaxed_candidate_rows": [],
-        "brick_relaxed_fusion_list": brick_relaxed_fusion_list,
         "brick_case_rank_lgbm_top20_list": brick_case_rank_lgbm_top20_list,
     }
     workers = int(os.environ.get("QSTRATEGY_MAIN_WORKERS", DEFAULT_SCAN_WORKERS))
@@ -333,19 +362,6 @@ if __name__ == '__main__':
     b3_list.sort()
     pin_list.sort()
     brick_list.sort()
-    print("开始执行 BRICK relaxed_fusion 候选排序...")
-    relaxed_candidate_rows = result_map["brick_relaxed_candidate_rows"]
-    if relaxed_candidate_rows:
-        try:
-            brick_relaxed_fusion_list = brickfilter_relaxed_fusion.rank_current_candidates(
-                current_df=brickfilter_relaxed_fusion.pd.DataFrame(relaxed_candidate_rows),
-                data_dir=data_dir_after,
-            )
-        except Exception as exc:
-            print(f"BRICK relaxed_fusion 跳过：{exc}")
-            brick_relaxed_fusion_list = []
-    else:
-        brick_relaxed_fusion_list = []
     print("开始执行 BRICK case_rank_lgbm_top20 全市场排序...")
     try:
         brick_case_rank_lgbm_top20_list = brickfilter_case_rank_lgbm_top20.scan_dir(
@@ -356,13 +372,18 @@ if __name__ == '__main__':
     except Exception as exc:
         print(f"BRICK case_rank_lgbm_top20 跳过：{exc}")
         brick_case_rank_lgbm_top20_list = []
-    print("💡持有列表：", sell_list, '\n', "💡b3列表：", b3_list, '\n', "💡单针列表：", pin_list, '\n', "💡brick列表：", brick_list, '\n', "💡BRICK_RELAXED_FUSION列表：", brick_relaxed_fusion_list, '\n', "💡BRICK_CASE_RANK_LGBM_TOP20列表：", brick_case_rank_lgbm_top20_list, '\n')
-    selectprint.show(sell_list, "持有")
-    selectprint.show(b3_list, "B3")
-    selectprint.show(pin_list, "单针")
-    selectprint.show(brick_list, "BRICK")
-    selectprint.show(brick_relaxed_fusion_list, "BRICK_RELAXED_FUSION")
-    selectprint.show(brick_case_rank_lgbm_top20_list, "BRICK_CASE_RANK_LGBM_TOP20")
+    print(
+        "💡持有列表：", _format_named_list(sell_list, code_name_map), '\n',
+        "💡b3列表：", _format_named_list(b3_list, code_name_map), '\n',
+        "💡单针列表：", _format_named_list(pin_list, code_name_map), '\n',
+        "💡brick列表：", _format_named_list(brick_list, code_name_map), '\n',
+        "💡BRICK_CASE_RANK_LGBM_TOP20列表：", _format_named_list(brick_case_rank_lgbm_top20_list, code_name_map), '\n'
+    )
+    selectprint.show(sell_list, "持有", code_name_map=code_name_map)
+    selectprint.show(b3_list, "B3", code_name_map=code_name_map)
+    selectprint.show(pin_list, "单针", code_name_map=code_name_map)
+    selectprint.show(brick_list, "BRICK", code_name_map=code_name_map)
+    selectprint.show(brick_case_rank_lgbm_top20_list, "BRICK_CASE_RANK_LGBM_TOP20", code_name_map=code_name_map)
 
     result_dir = str(project_paths.RESULTS_DIR)
     if not os.path.exists(result_dir):
@@ -377,7 +398,6 @@ if __name__ == '__main__':
             'sell_list': sell_list,
             'pin_list': pin_list,
             'brick_list': brick_list,
-            'brick_relaxed_fusion_list': brick_relaxed_fusion_list,
             'brick_case_rank_lgbm_top20_list': brick_case_rank_lgbm_top20_list,
             'hold_list': hold_list
         }, f, ensure_ascii=False, indent=2)
